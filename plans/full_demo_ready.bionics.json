@@ -1,0 +1,174 @@
+{
+  "name": "FULL DEMO READY \u2014 Complete Vertical Slice",
+  "description": "Every single step to get the Sworder:721 demo playable. AnimBP wiring, montage fixes, root motion, asset registration, enemy AI, HUD, PIE verification. ONE plan, ZERO gaps.",
+  "steps": [
+    {
+      "index": 1,
+      "description": "Open ABP_SW_MasterTemplate \u2014 verify parent class is SWAnimInstance",
+      "detailed_instructions": "Open ABP_SW_MasterTemplate from Content Browser at /Game/Variant_Combat/Anims/. Click Class Settings in toolbar. Verify Parent Class = SWAnimInstance (NOT UAnimInstance). If wrong, change it. This is CRITICAL for NativePostEvaluateAnimation to work.",
+      "verification": "Parent Class shows SWAnimInstance",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "verification",
+      "status": "pending"
+    },
+    {
+      "index": 2,
+      "description": "Verify AnimGraph chain: Locomotion SM -> DefaultSlot -> Output Pose",
+      "detailed_instructions": "In AnimGraph tab, verify three nodes connected left to right: Locomotion State Machine output -> Slot node (DefaultGroup.DefaultSlot) -> Output Pose. If chain is broken, reconnect by dragging pose pins.",
+      "verification": "Chain connected with white lines between all three nodes",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "verification",
+      "status": "pending"
+    },
+    {
+      "index": 3,
+      "description": "Enter Locomotion SM \u2014 verify IdleWalkRun state with BlendSpace",
+      "detailed_instructions": "Double-click Locomotion node. Verify Entry arrow connects to IdleWalkRun state. Double-click IdleWalkRun. Verify Blend Space Player is set to BS_Trooper_WalkRun or BS_Strafe_WalkRun_RT with Speed and Direction variables connected. Go back to AnimGraph breadcrumb.",
+      "verification": "IdleWalkRun has working BlendSpace with Speed and Direction",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "verification",
+      "status": "pending"
+    },
+    {
+      "index": 4,
+      "description": "Set Root Motion Mode on AnimBP",
+      "detailed_instructions": "In ABP_SW_MasterTemplate, click Class Settings. In Details search for Root Motion Mode. Set to No Root Motion Extraction. This prevents mesh teleporting during montages while keeping montage animations visible.",
+      "verification": "Root Motion Mode = No Root Motion Extraction",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "configuration",
+      "status": "pending"
+    },
+    {
+      "index": 5,
+      "description": "Compile and save ABP_SW_MasterTemplate",
+      "detailed_instructions": "Press F7 to compile. Verify green checkmark. Press Ctrl+S to save.",
+      "verification": "Green checkmark, saved",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "verification",
+      "status": "pending"
+    },
+    {
+      "index": 6,
+      "description": "Fix AM_ComboAttack montage \u2014 root motion and slot",
+      "detailed_instructions": "Open AM_ComboAttack from Content Browser. In Details: Enable Root Motion Translation = FALSE, Enable Root Motion Rotation = FALSE, Force Root Lock = TRUE. Verify the Slot Track at bottom shows DefaultGroup.DefaultSlot. If wrong, right-click slot track to change. Preview the animation \u2014 skeleton should punch. Save Ctrl+S.",
+      "verification": "Root motion off, force root lock on, slot = DefaultSlot, preview shows punch",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "configuration",
+      "status": "pending"
+    },
+    {
+      "index": 7,
+      "description": "Fix AM_DodgeRoll montage \u2014 root motion and slot",
+      "detailed_instructions": "Open AM_DodgeRoll. Details: Enable Root Motion Translation = FALSE, Enable Root Motion Rotation = FALSE, Force Root Lock = TRUE. Slot = DefaultGroup.DefaultSlot. Save.",
+      "verification": "Root motion off, force root lock on, correct slot",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "configuration",
+      "status": "pending"
+    },
+    {
+      "index": 8,
+      "description": "Fix AM_Slide and AM_VaultMantle montages",
+      "detailed_instructions": "Open AM_Slide then AM_VaultMantle. For each: Enable Root Motion Translation = FALSE, Enable Root Motion Rotation = FALSE, Force Root Lock = TRUE. Slot = DefaultGroup.DefaultSlot. Save each.",
+      "verification": "Both montages configured correctly",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "configuration",
+      "status": "pending"
+    },
+    {
+      "index": 9,
+      "description": "Set BP_SWCharacter to use ABP_SW_MasterTemplate",
+      "detailed_instructions": "Open BP_SWCharacter. Click Mesh component in Components panel. In Details find Animation > Anim Class. Set to ABP_SW_MasterTemplate. Compile BP with F7. Save Ctrl+S.",
+      "verification": "Mesh Anim Class = ABP_SW_MasterTemplate, compiled green",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "configuration",
+      "status": "pending"
+    },
+    {
+      "index": 10,
+      "description": "PIE TEST 1 \u2014 Locomotion and montage visibility",
+      "detailed_instructions": "Press Alt+P. Test: 1) Idle = animated no T-pose. 2) WASD = walk/run blend. 3) Left click = punch montage VISIBLE on mesh. 4) Dodge = roll visible. If montage still invisible, open console (backtick) type ShowDebug Animation to see slot weights. Escape to stop.",
+      "verification": "Character moves and montages play visually",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "verification",
+      "status": "pending"
+    },
+    {
+      "index": 11,
+      "description": "Run bionics_wire_vertical_slice.py for DataAssets and config",
+      "detailed_instructions": "Open Output Log (Window > Developer Tools > Output Log). In the command bar at bottom, type: py import unreal; exec(open(unreal.Paths.project_content_dir()+'Python/bionics_wire_vertical_slice.py').read()) and press Enter. The leading `py` routes the line to UE5's Python interpreter. This creates all DataAssets, registers Asset Manager, configures GameMode, verifies character BP. Watch the log for OK/FAIL messages.",
+      "verification": "Output Log shows BIONICS phases completing with OK messages",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "configuration",
+      "status": "pending"
+    },
+    {
+      "index": 12,
+      "description": "Run animbp_doctor.py for full animation verification",
+      "detailed_instructions": "In Output Log command bar type: py import unreal; exec(open(unreal.Paths.project_content_dir()+'Python/animbp_doctor.py').read()) and press Enter. The leading `py` routes the line to UE5's Python interpreter. Watch for 7 phases of verification. All should show OK.",
+      "verification": "AnimBP Doctor reports ALL GREEN",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "verification",
+      "status": "pending"
+    },
+    {
+      "index": 13,
+      "description": "Verify BP_EXOGameMode defaults",
+      "detailed_instructions": "Open BP_EXOGameMode from Content Browser. Click Class Defaults. Verify: Default Pawn Class = BP_SWCharacter. Verify Default Biome is set to DA_Biome_Forest. Compile and save.",
+      "verification": "GameMode defaults correct, compiled",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "verification",
+      "status": "pending"
+    },
+    {
+      "index": 14,
+      "description": "Verify EXO_001 map has PlayerStart",
+      "detailed_instructions": "Open the EXO_001 level from Content Browser (/Game/EXO_001). In the World Outliner, search for PlayerStart. There should be at least one. If none exists, drag a PlayerStart from Place Actors panel into the level. Save the level.",
+      "verification": "At least one PlayerStart exists in EXO_001",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "verification",
+      "status": "pending"
+    },
+    {
+      "index": 15,
+      "description": "Verify DefaultEngine.ini map and GameMode",
+      "detailed_instructions": "Open your UE5 project's Config/DefaultEngine.ini file in a text editor (the project folder is the one containing your .uproject file). Search for GameDefaultMap. It should say /Game/EXO_001. Search for GlobalDefaultGameMode. It should say /Game/BP_EXOGameMode. If these are wrong, fix them.",
+      "verification": "DefaultEngine.ini points to EXO_001 map and BP_EXOGameMode",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "verification",
+      "status": "pending"
+    },
+    {
+      "index": 16,
+      "description": "PIE TEST 2 \u2014 Full demo test",
+      "detailed_instructions": "Press Alt+P for PIE. Full test checklist: 1) Character spawns on terrain (not falling). 2) Terrain is connected (no gaps). 3) Warehouses have flat ground. 4) Walk/run blends. 5) Jump works. 6) Punch montage visible. 7) Dodge montage visible. 8) Trees/grass around but not through buildings. 9) Interior lights on in warehouses. 10) No crashes for 60 seconds of play.",
+      "verification": "All 10 checks pass \u2014 demo is playable",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "verification",
+      "status": "pending"
+    }
+  ],
+  "prerequisites": [
+    "UE5 Editor open with Sworder721 project",
+    "All C++ compiled (GAS, terrain, movement, combat)"
+  ],
+  "warnings": [
+    "Do not modify terrain or EXO procedural generation code",
+    "Save frequently"
+  ]
+}

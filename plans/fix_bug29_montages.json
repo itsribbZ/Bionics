@@ -1,0 +1,124 @@
+{
+  "name": "Fix Bug #29 — Invisible Montages",
+  "description": "Diagnose and fix why montages fire but mesh stays in locomotion pose. Root motion, slot config, parent class, animation data verification, NativePostEvaluateAnimation XY shift interaction.",
+  "estimated_steps": 12,
+  "prerequisites": [
+    "UE5 Editor open with Sworder721 project",
+    "ABP_SW_MasterTemplate wired: Locomotion SM -> DefaultSlot -> Output Pose",
+    "BP_SWCharacter uses ABP_SW_MasterTemplate"
+  ],
+  "warnings": [
+    "Do not modify terrain or EXO files",
+    "Save before each major change"
+  ],
+  "steps": [
+    {
+      "index": 1,
+      "description": "Open ABP_SW_MasterTemplate and verify parent class is SWAnimInstance",
+      "detailed_instructions": "Open ABP_SW_MasterTemplate in Content Browser by double-clicking it. Click Class Settings button in the toolbar. In the Details panel, check Parent Class. It MUST be SWAnimInstance, NOT UAnimInstance. If it says UAnimInstance, click the Parent Class dropdown and change it to SWAnimInstance. This is critical — SWAnimInstance has NativePostEvaluateAnimation which handles the XY shift guard during montages.",
+      "verification": "Parent Class shows SWAnimInstance in Class Settings",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "verification"
+    },
+    {
+      "index": 2,
+      "description": "Verify AnimGraph chain is correct",
+      "detailed_instructions": "Click on AnimGraph tab. Verify the chain flows left to right: Locomotion State Machine output -> Slot node (DefaultGroup.DefaultSlot) -> Output Pose. If any connection is missing, drag from the output pose pin of the left node to the input pose pin of the right node. The Slot node must show DefaultGroup.DefaultSlot in its details.",
+      "verification": "Chain visible: Locomotion SM -> Slot (DefaultSlot) -> Output Pose, all connected with white lines",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "verification"
+    },
+    {
+      "index": 3,
+      "description": "Open AM_ComboAttack montage and check its Slot Name",
+      "detailed_instructions": "In Content Browser, search for AM_ComboAttack and double-click to open it. In the montage editor, look at the timeline at the bottom. You should see a track labeled with a slot name. Click on the Montage Sections area or the Slot Track. In the Details panel or the track header, verify the Slot Name is DefaultGroup.DefaultSlot. If it says something different (like DefaultGroup.UpperBody or blank), right-click the slot track and change it to DefaultGroup.DefaultSlot.",
+      "verification": "AM_ComboAttack montage Slot track shows DefaultGroup.DefaultSlot",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "verification"
+    },
+    {
+      "index": 4,
+      "description": "Check AM_ComboAttack animation data has actual bone transforms",
+      "detailed_instructions": "With AM_ComboAttack open, look at the preview viewport. Click the Play button in the preview to play the montage. Watch if the preview skeleton actually moves and punches. If the preview skeleton does NOT move (stays in T-pose or idle), the animation data has near-zero bone deltas from a bad retarget — the animation needs to be re-imported or re-retargeted. If the preview DOES move correctly, the animation data is fine and the problem is elsewhere.",
+      "verification": "Preview skeleton visually performs a punch animation when played",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "verification"
+    },
+    {
+      "index": 5,
+      "description": "Disable root motion on AM_ComboAttack",
+      "detailed_instructions": "With AM_ComboAttack still open, find the Details panel on the right. Search for Enable Root Motion Translation and set it to FALSE. Search for Enable Root Motion Rotation and set it to FALSE. Search for Force Root Lock and set it to TRUE. Save the montage with Ctrl+S. This prevents the mesh from teleporting when the montage plays.",
+      "verification": "Root Motion Translation OFF, Root Motion Rotation OFF, Force Root Lock ON",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "configuration"
+    },
+    {
+      "index": 6,
+      "description": "Repeat root motion fix for AM_DodgeRoll",
+      "detailed_instructions": "Open AM_DodgeRoll from Content Browser. In Details: Enable Root Motion Translation = FALSE, Enable Root Motion Rotation = FALSE, Force Root Lock = TRUE. Verify the Slot Name is DefaultGroup.DefaultSlot. Save with Ctrl+S.",
+      "verification": "AM_DodgeRoll has root motion disabled, force root lock on, correct slot name",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "configuration"
+    },
+    {
+      "index": 7,
+      "description": "Repeat root motion fix for AM_Slide",
+      "detailed_instructions": "Open AM_Slide from Content Browser. In Details: Enable Root Motion Translation = FALSE, Enable Root Motion Rotation = FALSE, Force Root Lock = TRUE. Verify Slot Name = DefaultGroup.DefaultSlot. Save with Ctrl+S.",
+      "verification": "AM_Slide configured correctly",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "configuration"
+    },
+    {
+      "index": 8,
+      "description": "Check ABP_SW_MasterTemplate root motion mode",
+      "detailed_instructions": "Open ABP_SW_MasterTemplate. Click Class Settings in toolbar. In Details panel, search for Root Motion Mode. It should be set to Root Motion from Montages Only or No Root Motion Extraction. Do NOT set it to Root Motion from Everything — that causes teleporting. If it says Root Motion from Everything, change it to No Root Motion Extraction.",
+      "verification": "Root Motion Mode is NOT set to Root Motion from Everything",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "configuration"
+    },
+    {
+      "index": 9,
+      "description": "Compile ABP_SW_MasterTemplate",
+      "detailed_instructions": "With ABP_SW_MasterTemplate open, press F7 to compile. Verify green checkmark. Press Ctrl+S to save.",
+      "verification": "Green checkmark on compile, no errors",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "verification"
+    },
+    {
+      "index": 10,
+      "description": "Verify BP_SWCharacter uses ABP_SW_MasterTemplate",
+      "detailed_instructions": "Open BP_SWCharacter from Content Browser. Click on the Mesh component in the Components panel. In Details panel, find Anim Class or Animation Blueprint. It should show ABP_SW_MasterTemplate. If it shows a different AnimBP, click the dropdown and select ABP_SW_MasterTemplate. Compile the BP with F7 and save with Ctrl+S.",
+      "verification": "BP_SWCharacter Mesh component Anim Class = ABP_SW_MasterTemplate",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "configuration"
+    },
+    {
+      "index": 11,
+      "description": "PIE test — punch montage visibility",
+      "detailed_instructions": "Press Alt+P to start PIE. Wait for the character to spawn. Press left mouse button to punch. Watch the character mesh carefully. The punch animation should play visually on the mesh. If the mesh still stays in idle/locomotion pose, press ShowDebug Animation in the console (backtick key, type ShowDebug Animation, enter) to see what the AnimGraph is doing. Look for the DefaultSlot weight — it should show 1.0 during the punch. Press Escape to stop PIE.",
+      "verification": "Punch animation visually plays on the character mesh during PIE",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "verification"
+    },
+    {
+      "index": 12,
+      "description": "If montage still invisible — use ShowDebug Animation to diagnose",
+      "detailed_instructions": "If the punch still does not show visually: Start PIE again. Open console with backtick key. Type: ShowDebug Animation and press Enter. This shows the AnimGraph evaluation overlay. Look for: 1) Active Montages section — should show AM_ComboAttack when punching. 2) Slot weight for DefaultSlot — should be 1.0. 3) If slot weight is 0.0, the Slot node is not connected properly. 4) If slot weight is 1.0 but mesh doesnt move, the animation data has near-zero bone transforms and needs re-retargeting. Take a screenshot of the ShowDebug output for diagnosis.",
+      "verification": "ShowDebug Animation shows the montage state and slot weights for diagnosis",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "verification"
+    }
+  ]
+}

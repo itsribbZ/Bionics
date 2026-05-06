@@ -1,0 +1,44 @@
+{
+  "name": "Run AnimBP Doctor Diagnostics",
+  "description": "Type the animbp_doctor command directly into UE5's Output Log console and capture results.",
+  "steps": [
+    {
+      "index": 1,
+      "description": "Focus UE5 Editor window",
+      "detailed_instructions": "Click on the Unreal Editor window to bring it to the foreground. Look for a window with 'Unreal Editor' in the title bar.",
+      "verification": "UE5 Editor is the active foreground window.",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "navigation"
+    },
+    {
+      "index": 2,
+      "description": "Click the Output Log console input field",
+      "detailed_instructions": "Find the Output Log panel at the bottom of UE5. Click on the text input field at the very bottom of the Output Log. It shows placeholder text like 'Enter Console Command'. If the Output Log is not visible, first go to Window > Developer Tools > Output Log.",
+      "verification": "Console input field is focused with a blinking cursor.",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "navigation"
+    },
+    {
+      "index": 3,
+      "description": "Type the doctor command and execute",
+      "detailed_instructions": "Type this exact text into the console input field: py import unreal; exec(open(unreal.Paths.project_content_dir()+'Python/animbp_doctor.py').read()) then press Enter to run it. Do NOT use a template action. Just use type_text to type the command, then hotkey Enter.",
+      "verification": "The Output Log shows diagnostic output from the AnimBP Doctor script.",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "input"
+    },
+    {
+      "index": 4,
+      "description": "Wait for results",
+      "detailed_instructions": "Wait 5 seconds for the script to finish executing. The Output Log should show diagnostic results about the AnimBP, skeleton, blend spaces, and any issues found.",
+      "verification": "Diagnostic output visible in the Output Log.",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "verification"
+    }
+  ],
+  "prerequisites": ["UE5 Editor open with Sworder:721 project"],
+  "warnings": ["Read-only diagnostic - does not modify anything"]
+}

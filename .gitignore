@@ -1,0 +1,124 @@
+# Bionics .gitignore
+# ──────────────────────────────────────────────────────────────────────────────
+# User-specific / generated — NEVER commit
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Personal config (ship config.yaml.example instead)
+config.yaml
+.mcp.json
+
+# Runtime telemetry / state
+audit/
+session_state.json
+*.log
+*.log.*
+
+# SQLite databases (memory.sqlite, tool_cache.sqlite, journal/WAL files)
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.db
+
+# BionicsBridge instance discovery (contains port + auth token)
+.bionics-bridge/
+instance.json
+
+# Secrets / env
+.env
+.env.*
+*.key
+*.pem
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Python build + package artifacts
+# ──────────────────────────────────────────────────────────────────────────────
+
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+pip-log.txt
+pip-delete-this-directory.txt
+
+# PyInstaller
+*.manifest
+
+# Test + type-check caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.hypothesis/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# ──────────────────────────────────────────────────────────────────────────────
+# IDE / editor
+# ──────────────────────────────────────────────────────────────────────────────
+
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+*.swp
+*.swo
+*~
+
+# ──────────────────────────────────────────────────────────────────────────────
+# OS cruft
+# ──────────────────────────────────────────────────────────────────────────────
+
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ──────────────────────────────────────────────────────────────────────────────
+# UE5 plugin build artifacts (when BionicsBridge is built inside a UE project)
+# ──────────────────────────────────────────────────────────────────────────────
+
+plugins/*/Binaries/
+plugins/*/Intermediate/
+plugins/*/DerivedDataCache/
+plugins/*/Saved/
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Demo recording raw takes — deliverables are committed, masters are not
+# ──────────────────────────────────────────────────────────────────────────────
+
+docs/demos/media/raw_takes/
+docs/demos/media/*.mkv
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Temp / scratch
+# ──────────────────────────────────────────────────────────────────────────────
+
+*.tmp
+*.bak
+*.orig
+/tmp/
+/temp/
+plans/_tmp_*
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Per-machine Claude / agent state — never commit
+# ──────────────────────────────────────────────────────────────────────────────
+
+.claude/
+CLAUDE.md
+AGENTS.md

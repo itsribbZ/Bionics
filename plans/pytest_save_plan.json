@@ -1,0 +1,10 @@
+{
+  "name": "pytest_save_plan",
+  "title": "pytest_save_plan",
+  "description": "",
+  "steps": [
+    {
+      "action": "version"
+    }
+  ]
+}

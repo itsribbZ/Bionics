@@ -1,0 +1,131 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bionics-agent"
+version = "0.7.7"
+description = "AI agent for Unreal Engine 5 — 187 tools, native C++ bridge with bearer-token auth + locked-origin CORS + Win32 DACL token hardening + auth-gated health-check fingerprinting, MCP-native, hooks + guardrails + OTel + WAL-backed vector memory + thread-safe sub-agent fan-out (DESTRUCTIVE-gated, async-context-safe) + async Tasks (DESTRUCTIVE-gated, auto-evicting) + Voyager self-verification + session progress tracker + session_id traversal guard + locked tool-registry reads + PyInstaller-frozen path resolution + thinking-budget-aware max_tokens"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Jacob Ribbe" }]
+keywords = [
+    "unreal-engine",
+    "ue5",
+    "ai-agent",
+    "mcp",
+    "anthropic",
+    "claude",
+    "desktop-automation",
+    "game-dev",
+    "animation-pipeline",
+    "blueprint",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Games/Entertainment",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "License :: OSI Approved :: MIT License",
+]
+
+dependencies = [
+    "anthropic>=0.50.0,<2.0.0",
+    "PyQt6>=6.7.0,<7.0.0",
+    "mss>=9.0.0,<10.0.0",
+    "pyautogui>=0.9.54,<1.0.0",
+    "pynput>=1.7.7,<2.0.0",
+    "keyboard>=0.13.5,<1.0.0",
+    "PyMuPDF>=1.24.0,<2.0.0",
+    "Pillow>=10.4.0,<12.0.0",
+    "pyyaml>=6.0.2,<7.0.0",
+    "opencv-python>=4.10.0,<5.0.0",
+    "numpy>=1.26.0,<3.0.0",
+    "requests>=2.32.0,<3.0.0",
+    "pywinauto>=0.6.8,<1.0.0 ; sys_platform == 'win32'",
+    "fastmcp>=2.11.0,<4.0.0",
+    "pydantic>=2.9.0,<3.0.0",
+    # Tools: clipboard_get/_set + list_processes ship in the default install path.
+    # Promoted from optional extras (the `clipboard` and `processes` extras still
+    # exist as no-op aliases for callers pinning them) so a bare `pip install
+    # bionics-agent` lands a fully-functional default toolbelt.
+    "pyperclip>=1.9.0,<2.0.0",
+    "psutil>=6.0.0,<8.0.0",
+]
+
+[project.optional-dependencies]
+# Kept as no-op aliases for backwards-compatible callers; pyperclip/psutil are
+# now in the main dependencies list.
+clipboard = ["pyperclip>=1.9.0,<2.0.0"]
+processes = ["psutil>=6.0.0,<8.0.0"]
+ocr = ["pytesseract>=0.3.13,<1.0.0"]
+otel = [
+    "opentelemetry-sdk>=1.27.0,<2.0.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.27.0,<2.0.0",
+]
+vector = [
+    "sqlite-vec>=0.1.6,<1.0.0",
+]
+embeddings_local = [
+    "sentence-transformers>=3.0.0,<5.0.0",
+]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=5.0.0",
+    "ruff>=0.6.0",
+    "mypy>=1.11.0",
+]
+all = [
+    "pyperclip>=1.9.0,<2.0.0",
+    "psutil>=6.0.0,<8.0.0",
+    "pytesseract>=0.3.13,<1.0.0",
+    # Matched upper-bound with requirements.txt — both now agree on psutil <8.0.0.
+    "opentelemetry-sdk>=1.27.0,<2.0.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.27.0,<2.0.0",
+    "sqlite-vec>=0.1.6,<1.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/jbro1/bionics"
+Repository = "https://github.com/jbro1/bionics"
+Issues = "https://github.com/jbro1/bionics/issues"
+
+[project.scripts]
+bionics = "cli:main"
+bionics-gui = "main:main"
+bionics-mcp = "mcp_server:main"
+
+[tool.setuptools]
+# Explicit package discovery — avoid grabbing audit/, dist/, plans/
+py-modules = ["main", "cli", "mcp_server", "build", "watch"]
+
+[tool.setuptools.packages.find]
+include = ["core*", "bionics_tools*", "gui*", "ue5_modules*"]
+exclude = ["tests*", "audit*", "dist*", "build*", "plugins*", "plans*", "templates*", "market*", "docs*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "N"]
+ignore = ["E501", "E731"]  # line length, lambda
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = false
+warn_unused_configs = true
+ignore_missing_imports = true

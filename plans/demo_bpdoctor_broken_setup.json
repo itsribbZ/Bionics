@@ -1,0 +1,104 @@
+{
+  "name": "demo_bpdoctor_broken_setup",
+  "title": "Demo: Set up a pre-broken AnimBP for the T1.A BPDoctor hero GIF",
+  "description": "Intentionally inserts 5 canonical BPDoctor-detectable bugs into ABP_Trooper_DemoBroken so the hero GIF can showcase a live scan+fix cycle. Run this ONCE before recording T1.A takes. The bugs are reversible — ABP_Trooper itself is untouched.",
+  "prerequisites": [
+    "ABP_Trooper exists and has a MotionMatching node wired into its locomotion state",
+    "BionicsBridge + BPDoctor plugins compiled in the target project"
+  ],
+  "warnings": [
+    "This plan INTENTIONALLY breaks the duplicated AnimBP. Only run against the _DemoBroken copy, never against ABP_Trooper directly.",
+    "Re-running is idempotent but re-breaks anything a prior BPDoctor fix-all cleaned up."
+  ],
+  "steps": [
+    {
+      "index": 0,
+      "description": "Duplicate ABP_Trooper → ABP_Trooper_DemoBroken",
+      "action": "ue5_duplicate_asset",
+      "params": {
+        "source_path": "/Game/Animation/ABP_Trooper",
+        "destination_path": "/Game/Animation/ABP_Trooper_DemoBroken"
+      },
+      "category": "ue5_asset",
+      "is_destructive": true
+    },
+    {
+      "index": 1,
+      "description": "Bug #1 — Null the MM Database property (triggers MM_NO_DATABASE)",
+      "action": "ue5_run_python",
+      "params": {
+        "script": "import unreal\nhelper = unreal.SWPoseSearchHelper()\nhelper.clear_motion_matching_database('/Game/Animation/ABP_Trooper_DemoBroken')"
+      },
+      "category": "ue5_python",
+      "is_destructive": true
+    },
+    {
+      "index": 2,
+      "description": "Bug #2 — Delete the Inertialization node after the MM loop (triggers MM_NO_INERTIALIZATION)",
+      "action": "ue5_delete_animgraph_node",
+      "params": {
+        "animbp_path": "/Game/Animation/ABP_Trooper_DemoBroken",
+        "node_class": "AnimGraphNode_Inertialization"
+      },
+      "category": "ue5_animgraph",
+      "is_destructive": true
+    },
+    {
+      "index": 3,
+      "description": "Bug #3 — Point a Slot node at a missing slot group (triggers SLOT_NAME_MISMATCH)",
+      "action": "ue5_set_animnode_property",
+      "params": {
+        "animbp_path": "/Game/Animation/ABP_Trooper_DemoBroken",
+        "node_class": "AnimGraphNode_Slot",
+        "property_name": "SlotName",
+        "property_value": "ThisSlotDoesNotExist"
+      },
+      "category": "ue5_animgraph",
+      "is_destructive": true
+    },
+    {
+      "index": 4,
+      "description": "Bug #4 — Push LBPB weights off 1.0 sum (triggers BLEND_WT_SUM, auto-fixable)",
+      "action": "ue5_set_animnode_property",
+      "params": {
+        "animbp_path": "/Game/Animation/ABP_Trooper_DemoBroken",
+        "node_class": "AnimGraphNode_LayeredBoneBlend",
+        "property_name": "BlendWeights",
+        "property_value": [0.3, 0.3, 0.3]
+      },
+      "category": "ue5_animgraph",
+      "is_destructive": true
+    },
+    {
+      "index": 5,
+      "description": "Bug #5 — Clear LBPB BranchFilters (triggers EMPTY_BRANCH_FILTER)",
+      "action": "ue5_set_animnode_property",
+      "params": {
+        "animbp_path": "/Game/Animation/ABP_Trooper_DemoBroken",
+        "node_class": "AnimGraphNode_LayeredBoneBlend",
+        "property_name": "BranchFilters",
+        "property_value": []
+      },
+      "category": "ue5_animgraph",
+      "is_destructive": true
+    },
+    {
+      "index": 6,
+      "description": "Compile the broken AnimBP — should emit lint warnings but not crash",
+      "action": "ue5_compile_blueprint",
+      "params": {
+        "blueprint_path": "/Game/Animation/ABP_Trooper_DemoBroken"
+      },
+      "category": "ue5_blueprint"
+    },
+    {
+      "index": 7,
+      "description": "Pre-scan screenshot so the demo has a before-state reference frame",
+      "action": "ue5_capture_viewport",
+      "params": {
+        "output_path": "audit/demo_bpdoctor/00_before_scan.png"
+      },
+      "category": "capture"
+    }
+  ]
+}

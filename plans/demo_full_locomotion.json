@@ -1,0 +1,222 @@
+{
+  "name": "demo_full_locomotion",
+  "title": "Demo: One-Prompt Full Locomotion (T1.B)",
+  "description": "Reference plan for the T1.B WWZ ignition demo. Builds a complete Bible-aligned locomotion system on the Trooper character: retarget 70 GASP anims, Motion Matching schema + database, IK Rig chains, Linked Rifle layer, Niagara muzzle flash, BPDoctor fix-all. Used as ground truth to check what Bionics emits from the one-prompt demo, and as a fallback plan if the zero-shot emission isn't clean enough to ship.",
+  "prerequisites": [
+    "UE5 5.7+ with PoseSearch plugin enabled",
+    "BionicsBridge + BPDoctor plugins compiled in the target project",
+    "GASP anims present in /Game/Characters/Mannequin_Anims/ (pre-retarget)",
+    "ABP_Trooper exists with skeleton CH_SciFiTrooper_Man_03_Skeleton",
+    "IK_Mannequin + IKR_MannequinToTrooper assets present",
+    "Bionics MCP server running with BIONICS_MCP_ALLOW_DESTRUCTIVE=true"
+  ],
+  "warnings": [
+    "DESTRUCTIVE tier — batch_retarget writes 70 new assets, MM schema rewrites private arrays.",
+    "ABP_Trooper AnimGraph is mutated in place. Back it up before recording a take.",
+    "PoseSearch schema requires a plugin rebuild if the Trooper skeleton has new bones added since last compile."
+  ],
+  "steps": [
+    {
+      "index": 0,
+      "description": "Capture a before-state screenshot of the UE5 viewport + Content Browser",
+      "action": "ue5_capture_viewport",
+      "params": {
+        "output_path": "audit/demo_locomotion/00_before.png"
+      },
+      "category": "capture"
+    },
+    {
+      "index": 1,
+      "description": "Batch-retarget 70 GASP anims from Mannequin skeleton to Trooper skeleton",
+      "action": "ue5_batch_retarget",
+      "params": {
+        "source_dir": "/Game/Characters/Mannequin_Anims",
+        "target_dir": "/Game/Characters/Trooper_Anims",
+        "retargeter_path": "/Game/Retargeting/IKR_MannequinToTrooper"
+      },
+      "category": "ue5_rigging",
+      "is_destructive": true
+    },
+    {
+      "index": 2,
+      "description": "Create the PoseSearch database asset DB_Locomotion",
+      "action": "ue5_create_asset",
+      "params": {
+        "asset_path": "/Game/Locomotion/DB_Locomotion",
+        "asset_class": "PoseSearchDatabase"
+      },
+      "category": "ue5_asset",
+      "is_destructive": true
+    },
+    {
+      "index": 3,
+      "description": "Populate DB_Locomotion with the 70 retargeted anims via SWPoseSearchHelper",
+      "action": "ue5_run_python",
+      "params": {
+        "script": "import unreal\ndb = unreal.load_asset('/Game/Locomotion/DB_Locomotion')\nhelper = unreal.SWPoseSearchHelper()\nhelper.populate_database(db, '/Game/Characters/Trooper_Anims')"
+      },
+      "category": "ue5_python",
+      "is_destructive": true
+    },
+    {
+      "index": 4,
+      "description": "Configure MM schema channels: pelvis, ball_l, ball_r, trajectory",
+      "action": "ue5_run_python",
+      "params": {
+        "script": "import unreal\nhelper = unreal.SWPoseSearchHelper()\nschema = helper.create_default_schema('/Game/Locomotion/MM_LocomotionSchema', '/Game/Characters/CH_SciFiTrooper_Man_03_Skeleton')\nhelper.add_bone_channel(schema, 'pelvis')\nhelper.add_bone_channel(schema, 'ball_l')\nhelper.add_bone_channel(schema, 'ball_r')\nhelper.add_trajectory_channel(schema)\nhelper.finalize_schema(schema)"
+      },
+      "category": "ue5_python",
+      "is_destructive": true
+    },
+    {
+      "index": 5,
+      "description": "Create IK Rig for the Trooper skeleton",
+      "action": "ue5_create_ik_rig",
+      "params": {
+        "rig_path": "/Game/Rigging/IKR_Trooper",
+        "skeleton_path": "/Game/Characters/CH_SciFiTrooper_Man_03_Skeleton"
+      },
+      "category": "ue5_rigging",
+      "is_destructive": true
+    },
+    {
+      "index": 6,
+      "description": "Add foot IK chains (left + right) with FBIK solver",
+      "action": "ue5_ik_rig_add_chain",
+      "params": {
+        "rig_path": "/Game/Rigging/IKR_Trooper",
+        "chain_name": "LeftLeg",
+        "start_bone": "thigh_l",
+        "end_bone": "ball_l",
+        "solver": "FBIK"
+      },
+      "category": "ue5_rigging"
+    },
+    {
+      "index": 7,
+      "description": "Add right-leg IK chain",
+      "action": "ue5_ik_rig_add_chain",
+      "params": {
+        "rig_path": "/Game/Rigging/IKR_Trooper",
+        "chain_name": "RightLeg",
+        "start_bone": "thigh_r",
+        "end_bone": "ball_r",
+        "solver": "FBIK"
+      },
+      "category": "ue5_rigging"
+    },
+    {
+      "index": 8,
+      "description": "Add hand IK chains (left + right) for weapon grip",
+      "action": "ue5_ik_rig_add_chain",
+      "params": {
+        "rig_path": "/Game/Rigging/IKR_Trooper",
+        "chain_name": "LeftArm",
+        "start_bone": "clavicle_l",
+        "end_bone": "hand_l",
+        "solver": "FBIK"
+      },
+      "category": "ue5_rigging"
+    },
+    {
+      "index": 9,
+      "description": "Right-arm IK chain",
+      "action": "ue5_ik_rig_add_chain",
+      "params": {
+        "rig_path": "/Game/Rigging/IKR_Trooper",
+        "chain_name": "RightArm",
+        "start_bone": "clavicle_r",
+        "end_bone": "hand_r",
+        "solver": "FBIK"
+      },
+      "category": "ue5_rigging"
+    },
+    {
+      "index": 10,
+      "description": "Create Linked Anim Layer for the Rifle weapon (ALI_Combat interface)",
+      "action": "ue5_linked_anim_layer_create",
+      "params": {
+        "layer_path": "/Game/Animation/Layers/ABP_RifleLayer",
+        "skeleton_path": "/Game/Characters/CH_SciFiTrooper_Man_03_Skeleton",
+        "interface_path": "/Game/Animation/Interfaces/ALI_Combat",
+        "parent_class": "/Game/Animation/ABP_Trooper.ABP_Trooper_C"
+      },
+      "category": "ue5_animlayer",
+      "is_destructive": true
+    },
+    {
+      "index": 11,
+      "description": "Wire the MM node into ABP_Trooper's locomotion state",
+      "action": "ue5_run_python",
+      "params": {
+        "script": "import unreal\nhelper = unreal.SWPoseSearchHelper()\nok = helper.build_motion_matching_anim_graph('/Game/Animation/ABP_Trooper', '/Game/Locomotion/DB_Locomotion', '/Game/Locomotion/MM_LocomotionSchema')\nprint(f'MM AnimGraph wired: {ok}')"
+      },
+      "category": "ue5_python",
+      "is_destructive": true
+    },
+    {
+      "index": 12,
+      "description": "Compile ABP_Trooper",
+      "action": "ue5_compile_blueprint",
+      "params": {
+        "blueprint_path": "/Game/Animation/ABP_Trooper"
+      },
+      "category": "ue5_blueprint",
+      "is_destructive": false
+    },
+    {
+      "index": 13,
+      "description": "Spawn a muzzle-flash Niagara emitter at the weapon tip",
+      "action": "ue5_niagara_spawn_emitter",
+      "params": {
+        "system_path": "/Game/VFX/NS_MuzzleFlash",
+        "attach_to_actor": "BP_Trooper",
+        "attach_socket": "MuzzleFlash"
+      },
+      "category": "ue5_niagara",
+      "is_destructive": true
+    },
+    {
+      "index": 14,
+      "description": "Bind the FireRate User parameter to the weapon tick",
+      "action": "ue5_niagara_set_param",
+      "params": {
+        "system_path": "/Game/VFX/NS_MuzzleFlash",
+        "param_name": "User.FireRate",
+        "param_type": "float",
+        "value": 600.0
+      },
+      "category": "ue5_niagara"
+    },
+    {
+      "index": 15,
+      "description": "Run BPDoctor scan on the finished AnimBP",
+      "action": "ue5_bpdoctor_scan",
+      "params": {
+        "animbp_path": "/Game/Animation/ABP_Trooper",
+        "min_severity": "Warning"
+      },
+      "category": "ue5_bpdoctor"
+    },
+    {
+      "index": 16,
+      "description": "Auto-fix everything BPDoctor flagged as auto-fixable",
+      "action": "ue5_bpdoctor_fix_all",
+      "params": {
+        "animbp_path": "/Game/Animation/ABP_Trooper",
+        "min_severity": "Warning"
+      },
+      "category": "ue5_bpdoctor",
+      "is_destructive": true
+    },
+    {
+      "index": 17,
+      "description": "Capture after-state viewport screenshot",
+      "action": "ue5_capture_viewport",
+      "params": {
+        "output_path": "audit/demo_locomotion/17_after.png"
+      },
+      "category": "capture"
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1.0",
+	"FriendlyName": "Bionics Bridge",
+	"Description": "Native C++ HTTP bridge for Bionics AI automation. Exposes UE5 editor and runtime tools via JSON-RPC on localhost. Works in editor and packaged builds.",
+	"Category": "Editor",
+	"CreatedBy": "Jacob Ribbe",
+	"CreatedByURL": "",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"SupportURL": "",
+	"CanContainContent": false,
+	"IsBetaVersion": true,
+	"IsExperimentalVersion": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "BionicsBridge",
+			"Type": "Runtime",
+			"LoadingPhase": "Default",
+			"PlatformAllowList": [ "Win64", "Mac", "Linux" ]
+		},
+		{
+			"Name": "BionicsBridgeEditor",
+			"Type": "Editor",
+			"LoadingPhase": "PostEngineInit",
+			"PlatformAllowList": [ "Win64", "Mac", "Linux" ]
+		}
+	],
+	"Plugins": [
+		{ "Name": "PythonScriptPlugin", "Enabled": true, "Optional": true },
+		{ "Name": "EditorScriptingUtilities", "Enabled": true, "Optional": true },
+		{ "Name": "BPDoctor", "Enabled": true },
+		{ "Name": "PoseSearch", "Enabled": true },
+		{ "Name": "ControlRig", "Enabled": true }
+	]
+}

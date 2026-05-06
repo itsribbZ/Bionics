@@ -1,0 +1,114 @@
+bionics:
+  version: "0.7.7"
+  name: "Bionics"
+
+api:
+  model: "claude-sonnet-4-6"
+  max_tokens: 4096
+  temperature: 0.0
+
+capture:
+  monitor: 0  # 0 = primary monitor
+  compression_quality: 75  # JPEG quality for API calls
+  audit_quality: 90  # JPEG quality for audit trail
+  max_width: 1920  # Resize if wider (saves API tokens)
+
+hotkeys:
+  quiz_scan: "f7"     # Scan screen for quiz answers
+  pause: "f9"
+  stop: "f10"
+  resume: "f11"
+  emergency_stop: "ctrl+f10"
+  watch_toggle: "f8"  # Toggle Watch Mode on/off
+
+watch_mode:
+  poll_interval_ms: 1000       # Time between capture cycles
+  ssim_threshold: 0.02         # Min screen change to trigger analysis (0.02 = 2%)
+  max_tokens: 1024             # Max Claude response tokens
+  dim_opacity: 0.55            # Overlay dim (0=none, 0.55=standard)
+  tts_enabled: true            # Text-to-speech narration
+  reduced_motion: false        # Disable animations for accessibility
+  circuit_breaker:
+    failure_threshold: 5       # Failures before circuit opens
+    recovery_timeout_s: 30     # Seconds before retry after circuit opens
+
+safety:
+  tiers:
+    safe:
+      confirmation: false
+      actions:
+        - mouse_move
+        - scroll
+        - screenshot
+        - read_screen
+        - wait
+    moderate:
+      confirmation: true
+      confirm_count: 1
+      actions:
+        - click
+        - double_click
+        - right_click
+        - type_text
+        - hotkey
+        - drag
+        - open_file
+        - switch_window
+    destructive:
+      confirmation: true
+      confirm_count: 2
+      actions:
+        - delete
+        - close_window
+        - overwrite_file
+        - uninstall
+        - format
+        - terminal_command
+
+agent:
+  loop_delay_ms: 500  # Delay between agent loop iterations
+  screenshot_interval_ms: 1000  # Min time between screenshots
+  max_retries: 3  # Max retries on API error
+  step_timeout_s: 300  # Max time per step before flagging
+
+ue5:
+  remote_control:
+    host: "127.0.0.1"
+    port: 30010
+    timeout_s: 5.0
+  python_execution:
+    port: 9998
+  auto_connect: true  # Check UE5 connection on agent start
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PATHS — Copy this file to `config.yaml` and fill in your own paths.
+# Leave a value as "" to disable that feature.
+# Environment variables take precedence over these values:
+#   BIONICS_UE5_PROJECT, BIONICS_BIBLE, BIONICS_DESIGN_DOCS,
+#   BIONICS_UE_KNOWLEDGE, BIONICS_MARKET_KB
+# ─────────────────────────────────────────────────────────────────────────────
+paths:
+  ue5_project: ""       # Absolute path to your .uproject directory (e.g. "C:/path/to/MyProject")
+  bible: ""             # Optional: project design Bible directory for divine_powers() context injection
+  design_docs: ""       # Optional: design docs directory
+  ue_knowledge: ""      # Optional: UE5 engine reference directory (for Sworder:721 users)
+  market_kb: ""         # Optional: MarketBot knowledge base directory
+
+precision:
+  template_dir: "templates/ui"
+  default_threshold: 0.8
+  multi_scale: [0.75, 0.85, 1.0, 1.15, 1.25]  # Scales for multi-scale matching
+  min_confidence: 0.7  # Below this, ask Claude for help
+
+verification:
+  enabled: true
+  verify_every_action: true
+  max_retries: 3
+  retry_delay_ms: 500
+  ssim_min_change: 0.001  # Minimum SSIM change to consider action successful
+
+audit:
+  enabled: true
+  save_screenshots: true
+  save_actions: true
+  max_audit_size_mb: 500

@@ -1,0 +1,97 @@
+{
+  "name": "Universal AnimBP Archetype System",
+  "project": "Sworder:721",
+  "version": "1.0",
+  "description": "3-tier AnimBP framework: ONE master template, ALL characters via duplication + configuration. Features controlled by blend weight alphas, not AnimGraph rewiring.",
+  "reference_pdf": "Docs/Design Systems/03_Animation_Physics/AnimBP_Archetype_System_2026-03-28.pdf",
+  "limitation": "UE5 Python API cannot modify AnimGraph nodes. Master template must be created manually once. All subsequent characters are automated via duplication.",
+
+  "tiers": {
+    "base": {
+      "description": "All NPCs, creatures, ambient characters",
+      "features": ["locomotion", "montages"],
+      "disabled": ["jump", "crouch", "weapon_layer", "aim_offset", "abilities", "inertialization"]
+    },
+    "combat": {
+      "description": "Enemies, combat NPCs, bosses",
+      "features": ["locomotion", "montages", "jump", "crouch", "weapon_layer", "aim_offset"],
+      "disabled": ["abilities", "inertialization", "bone_dynamics"]
+    },
+    "player": {
+      "description": "Player character only",
+      "features": ["locomotion", "montages", "jump", "crouch", "weapon_layer", "aim_offset", "abilities", "inertialization", "bone_dynamics"]
+    }
+  },
+
+  "master_template": {
+    "asset_path": "/Game/Variant_Combat/Anims/ABP_SW_MasterTemplate",
+    "parent_class": "USWAnimInstance",
+    "skeleton": "CH_SciFiTrooper_Man_03_Skeleton",
+    "animgraph_chain": "Locomotion SM -> DefaultSlot -> LBPB -> AimOffset -> Inertialization -> Output Pose",
+    "minimum_chain": "Locomotion SM -> DefaultSlot -> Output Pose"
+  },
+
+  "duplication_script": "Content/Python/duplicate_animbp.py",
+  "doctor_script": "Content/Python/animbp_doctor.py",
+  "wiring_assistant": "Content/Python/bionics_animbp_wiring.py",
+
+  "workflow": [
+    {
+      "phase": 1,
+      "title": "Pre-flight",
+      "type": "automated",
+      "script": "animbp_doctor.py",
+      "description": "Run AnimBP Doctor to verify skeleton, blend space (11 samples), montages (5/5), character BP config"
+    },
+    {
+      "phase": 2,
+      "title": "Create Master Template (ONE TIME)",
+      "type": "manual",
+      "description": "Follow the AnimBP Archetype Guide PDF. Create ABP_SW_MasterTemplate with full AnimGraph chain. This is done ONCE — never repeated.",
+      "steps": [
+        "Create AnimBP: Parent=USWAnimInstance, Skeleton=CH_SciFiTrooper_Man_03",
+        "Name: ABP_SW_MasterTemplate, save to /Game/Variant_Combat/Anims/",
+        "AnimGraph: create Locomotion State Machine",
+        "Inside SM: IdleWalkRun state with BS_Strafe_WalkRun_RT (Speed, Direction)",
+        "Add jump states: JumpStart -> JumpLoop -> JumpLand with transitions",
+        "Add crouch state: CrouchMove with bIsCrouched transitions",
+        "Back to AnimGraph: add DefaultSlot (DefaultGroup.DefaultSlot)",
+        "Add LBPB: spine_01 branch, weight=UpperBodyBlendAlpha",
+        "Add AimOffset: alpha=AimOffsetAlpha",
+        "Add Inertialization: SM transitions set to 0.2s",
+        "Wire chain: SM -> Slot -> LBPB -> AimOffset -> Inertialization -> Output",
+        "F7 compile, Ctrl+S save"
+      ],
+      "checkpoint": "Master template compiles with green checkmark"
+    },
+    {
+      "phase": 3,
+      "title": "Duplicate for All Characters",
+      "type": "automated",
+      "script": "duplicate_animbp.py",
+      "description": "Run duplication script to create AnimBPs for player, enemies, NPCs. Configures per-character tier settings automatically.",
+      "characters": ["Player", "MeleeRusher", "RangedSniper", "PatrolGuard", "GenericNPC"]
+    },
+    {
+      "phase": 4,
+      "title": "PIE Verification",
+      "type": "manual",
+      "description": "Play in editor and test: 1) Idle animation, 2) Walk/run blend, 3) Jump sequence, 4) Punch montage visible, 5) Dodge montage visible",
+      "test_checklist": [
+        "Idle: animated, no T-pose",
+        "Walk/Run: directional blend with Speed/Direction",
+        "Jump: start -> loop -> land sequence",
+        "Punch: AM_ComboAttack plays visually",
+        "Dodge: AM_DodgeRoll plays visually"
+      ]
+    }
+  ],
+
+  "adding_new_character": {
+    "step_1": "Edit CHARACTERS dict in duplicate_animbp.py",
+    "step_2": "Set tier (base/combat/player), skeleton, blend_space, character_bp",
+    "step_3": "Run: exec(open(r\"...\\duplicate_animbp.py\").read())",
+    "step_4": "AnimBP is created, configured, and assigned. Done.",
+    "time": "30 seconds per character"
+  }
+}

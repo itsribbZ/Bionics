@@ -1,0 +1,85 @@
+{
+  "name": "AnimBP Wiring Guide \u2014 Fix Bug #29",
+  "description": "Wire ABP_SW_MasterTemplate AnimGraph to fix invisible montages. Chain: Locomotion SM -> DefaultSlot -> Output Pose. Fix root motion on combat anims. Verify with PIE test.",
+  "steps": [
+    {
+      "index": 1,
+      "description": "Clean AnimGraph \u2014 delete all nodes except Output Pose",
+      "detailed_instructions": "In the AnimGraph tab of ABP_SW_MasterTemplate, press Ctrl+A to select all nodes. Then hold Ctrl and click on the Output Pose node to deselect it. Press Delete to remove all other nodes. Only Output Pose should remain.",
+      "verification": "Only the Output Pose node remains in the AnimGraph",
+      "is_destructive": true,
+      "requires_app": "Unreal Engine 5",
+      "category": "deletion",
+      "status": "pending"
+    },
+    {
+      "index": 2,
+      "description": "Create Locomotion State Machine",
+      "detailed_instructions": "Right-click on empty dark area in the AnimGraph. Type State Machine in the search box. Click Add New State Machine. Rename it to Locomotion by clicking on its title.",
+      "verification": "A State Machine node named Locomotion exists in the AnimGraph",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "creation",
+      "status": "pending"
+    },
+    {
+      "index": 3,
+      "description": "Add DefaultSlot node and wire the chain",
+      "detailed_instructions": "Right-click on empty space in the AnimGraph. Type Slot in the search box. Click to add a Slot node. Click on the Slot node and in the Details panel set Slot Name to DefaultGroup.DefaultSlot. Then drag from Locomotion SM output pose pin to the Slot input. Drag from Slot output to Output Pose input. Chain: Locomotion -> Slot -> Output Pose.",
+      "verification": "Three nodes connected left to right: Locomotion SM -> Slot (DefaultSlot) -> Output Pose",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "creation",
+      "status": "pending"
+    },
+    {
+      "index": 4,
+      "description": "Create IdleWalkRun state inside Locomotion SM",
+      "detailed_instructions": "Double-click the Locomotion State Machine node to enter it. You see an Entry node with green arrow. Right-click empty space, click Add State, name it IdleWalkRun. Drag from the Entry green arrow to the IdleWalkRun state to set it as default.",
+      "verification": "Inside Locomotion SM: Entry arrow connected to IdleWalkRun state",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "creation",
+      "status": "pending"
+    },
+    {
+      "index": 5,
+      "description": "Wire BlendSpace Player inside IdleWalkRun",
+      "detailed_instructions": "Double-click IdleWalkRun to enter the state. Right-click empty space, search Blend Space Player, add it. Click the node, in Details panel set Blend Space to BS_Trooper_WalkRun or BS_Strafe_WalkRun_RT. Drag from Speed pin, release, search Speed, select Speed variable. Drag from Direction pin, release, search Direction, select Direction variable. Connect the output pose to the Animation Pose result pin.",
+      "verification": "BlendSpace Player connected with Speed and Direction, output to Animation Pose result",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "configuration",
+      "status": "pending"
+    },
+    {
+      "index": 6,
+      "description": "Compile and save the AnimBP",
+      "detailed_instructions": "Click AnimGraph breadcrumb at top to return to top level. Press F7 to compile. Verify green checkmark appears. Press Ctrl+S to save.",
+      "verification": "Green checkmark on compile button, no errors",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "verification",
+      "status": "pending"
+    },
+    {
+      "index": 7,
+      "description": "PIE test \u2014 verify locomotion and montages",
+      "detailed_instructions": "Press Alt+P to start Play In Editor. Test: 1) Stand idle - character should animate, no T-pose. 2) WASD - directional walk/run blend. 3) Left click - punch montage should play visually. 4) Dodge key - dodge roll montage should play. Press Escape to stop PIE.",
+      "verification": "Character animates, walks, and montages play visually on the mesh",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "verification",
+      "status": "pending"
+    }
+  ],
+  "prerequisites": [
+    "UE5 Editor open with Sworder721 project",
+    "ABP_SW_MasterTemplate open in AnimGraph editor",
+    "BS_Strafe_WalkRun_RT blend space exists with 11 samples"
+  ],
+  "warnings": [
+    "Do NOT delete the Output Pose node",
+    "Context Sensitive should be OFF in right-click menu"
+  ]
+}

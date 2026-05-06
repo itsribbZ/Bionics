@@ -1,0 +1,11 @@
+{
+  "name": "system_info",
+  "description": "Inspect the host machine: system info (OS, CPU, RAM), screen size, and monitor layout. Useful as a second-tier smoke test before running any UE5 workflow.",
+  "steps": [
+    {"action": "system_info", "params": {}},
+    {"action": "get_screen_size", "params": {}},
+    {"action": "list_monitors", "params": {}}
+  ],
+  "prerequisites": [],
+  "warnings": []
+}

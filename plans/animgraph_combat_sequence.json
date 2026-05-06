@@ -1,0 +1,201 @@
+{
+  "name": "Combat AnimGraph Wiring",
+  "description": "Wire the full combat AnimGraph chain: Locomotion SM → DefaultSlot → Layered Blend Per Bone → Output Pose, with upper body weapon blend + UpperBody slot",
+  "research_summary": "C++ side fully wired in USWAnimInstance. WeaponAnimType, WeaponGripAlpha, AimOffsetAlpha, LeftHandIK all update every tick. AnimGraph just needs visual nodes wired to read these vars.",
+  "prerequisites": [
+    "UE5 editor open with MyProject loaded",
+    "AnimBP open in editor (setup_combat_animgraph.py opens it)",
+    "Python Remote Execution enabled",
+    "setup_combat_animgraph.py already executed (Phase 1)"
+  ],
+  "steps": [
+    {
+      "index": 1,
+      "description": "Run setup_combat_animgraph.py to validate AnimBP + skeleton + open editor",
+      "detailed_instructions": "Execute the Python setup script inside UE5. This finds the AnimBP, checks skeleton virtual bones for IK, verifies animation assets, and opens the AnimBP in the editor.",
+      "execution_method": "existing_script",
+      "existing_script": "setup_combat_animgraph.py",
+      "verification": "Output Log contains 'BIONICS_RESULT: setup_complete' and AnimBP editor window is visible",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "verification"
+    },
+    {
+      "index": 2,
+      "description": "Navigate to AnimGraph tab in the AnimBP editor",
+      "detailed_instructions": "In the AnimBP editor, click the 'AnimGraph' tab in the left panel (My Blueprint panel). This shows the main AnimGraph canvas where nodes are wired.",
+      "execution_method": "vision",
+      "verification": "Canvas shows 'Output Pose' node with a red/white result pin",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "navigation"
+    },
+    {
+      "index": 3,
+      "description": "Delete any existing connections to Output Pose (clean slate)",
+      "detailed_instructions": "If any nodes are already connected to Output Pose, right-click the connection wire and select 'Break Link'. We want a clean Output Pose pin to wire our chain to.",
+      "execution_method": "vision",
+      "verification": "Output Pose node has no incoming connections",
+      "is_destructive": true,
+      "requires_app": "Unreal Engine 5",
+      "category": "deletion"
+    },
+    {
+      "index": 4,
+      "description": "Add State Machine node named 'Locomotion'",
+      "detailed_instructions": "Right-click empty canvas area → search 'State Machine' → select 'Add New State Machine' → name it 'Locomotion'. This drives lower body movement (walk/run/sprint/jump).",
+      "execution_method": "vision",
+      "verification": "A node labeled 'Locomotion' appears on the canvas with a pose output pin",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "creation"
+    },
+    {
+      "index": 5,
+      "description": "Add Slot node 'DefaultSlot' (full body montages)",
+      "detailed_instructions": "Right-click empty canvas → search 'Slot' → select 'Slot' node → In details panel, set Slot Name = 'DefaultSlot'. This handles full-body override montages (dodge roll, death, finishers).",
+      "execution_method": "vision",
+      "verification": "A 'Slot DefaultSlot' node appears with pose in/out pins",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "creation"
+    },
+    {
+      "index": 6,
+      "description": "Add Layered Blend Per Bone node",
+      "detailed_instructions": "Right-click empty canvas → search 'Layered Blend Per Bone' → add it. In details panel: add Branch Filter entry, set Bone Name = 'spine_01', Blend Depth = 1. CHECK 'Mesh Space Rotation Blend' = true. This splits upper/lower body.",
+      "execution_method": "vision",
+      "verification": "A 'Layered Blend Per Bone' node appears with Base Pose + Blend Poses inputs",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "creation"
+    },
+    {
+      "index": 7,
+      "description": "Configure Layered Blend Per Bone: spine_01 split",
+      "detailed_instructions": "Select the Layered Blend Per Bone node. In Details panel: (1) Under 'Layer Setup', click + to add a branch filter. (2) Set Branch Filter > Bone Name = 'spine_01'. (3) Set Blend Depth = 1. (4) ENABLE 'Mesh Space Rotation Blend'. (5) The 'Blend Weights 0' pin should be bound to 'WeaponGripAlpha' variable.",
+      "execution_method": "vision",
+      "verification": "Details panel shows spine_01 in branch filter with depth 1 and mesh space rotation enabled",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "configuration"
+    },
+    {
+      "index": 8,
+      "description": "Add Slot node 'UpperBody' (weapon montages)",
+      "detailed_instructions": "Right-click empty canvas → search 'Slot' → add Slot node → set Slot Name = 'UpperBody'. This handles upper-body montages (reload, fire, equip, melee attacks).",
+      "execution_method": "vision",
+      "verification": "A 'Slot UpperBody' node appears",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "creation"
+    },
+    {
+      "index": 9,
+      "description": "Add Blend Poses by Int node for weapon type selection",
+      "detailed_instructions": "Right-click canvas → search 'Blend Poses by Int' → add it. Click the '+' button on the node 4 times to create 5 blend pose inputs (indices 0-4). Map to: 0=Unarmed, 1=Rifle, 2=Pistol, 3=Shotgun, 4=Melee. The 'Active Child Index' pin needs to be bound to 'Weapon Anim Type' variable (drag from My Blueprint panel).",
+      "execution_method": "vision",
+      "verification": "Blend Poses by Int node shows 5 pose inputs (0-4) and an Active Child Index pin",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "creation"
+    },
+    {
+      "index": 10,
+      "description": "Wire the LOWER BODY chain: Locomotion SM → Layered Blend Base Pose",
+      "detailed_instructions": "Drag from Locomotion SM output pose pin → drop on Layered Blend Per Bone 'Base Pose' input pin. This routes locomotion to the lower body.",
+      "execution_method": "vision",
+      "verification": "White wire connects Locomotion output to LayeredBlend Base Pose input",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "configuration"
+    },
+    {
+      "index": 11,
+      "description": "Wire the UPPER BODY chain: BlendByInt → UpperBody Slot → Layered Blend Blend Pose 0",
+      "detailed_instructions": "First: drag Blend Poses by Int output → UpperBody Slot input. Then: drag UpperBody Slot output → Layered Blend Per Bone 'Blend Poses 0' input. This routes weapon-type selection through the upper body montage slot to the layered blend.",
+      "execution_method": "vision",
+      "verification": "Chain visible: BlendByInt → UpperBody → LayeredBlend(Blend Pose 0)",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "configuration"
+    },
+    {
+      "index": 12,
+      "description": "Wire the FINAL chain: LayeredBlend → DefaultSlot → Output Pose",
+      "detailed_instructions": "Drag Layered Blend Per Bone output → DefaultSlot input. Then drag DefaultSlot output → Output Pose input. This completes the full chain.",
+      "execution_method": "vision",
+      "verification": "Full chain visible: SM → LayeredBlend ← BlendByInt → Slots → Output Pose",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "configuration"
+    },
+    {
+      "index": 13,
+      "description": "Bind WeaponGripAlpha to Layered Blend weight",
+      "detailed_instructions": "From My Blueprint panel, drag 'Weapon Grip Alpha' variable onto the canvas near the Layered Blend node. Wire the float pin to the 'Blend Weights 0' input on Layered Blend Per Bone. This drives how much upper body is weapon-posed vs locomotion.",
+      "execution_method": "vision",
+      "verification": "WeaponGripAlpha variable node connected to LayeredBlend BlendWeights pin",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "configuration"
+    },
+    {
+      "index": 14,
+      "description": "Bind WeaponAnimType to Blend Poses by Int active index",
+      "detailed_instructions": "From My Blueprint panel, drag 'Weapon Anim Type' variable onto canvas. The enum needs to be cast to int — add a 'To Integer (byte)' conversion node between the enum and the Active Child Index pin. Wire: WeaponAnimType → ToInt → BlendByInt(ActiveChildIndex).",
+      "execution_method": "vision",
+      "verification": "WeaponAnimType enum connected through int conversion to BlendByInt",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "configuration"
+    },
+    {
+      "index": 15,
+      "description": "Compile and Save the AnimBP",
+      "detailed_instructions": "Press F7 (or click Compile button in toolbar). Wait for green checkmark. Then press Ctrl+S to save. Check Output Log for any warnings.",
+      "execution_method": "vision",
+      "verification": "Green checkmark appears in AnimBP toolbar. No errors in Output Log.",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "verification"
+    },
+    {
+      "index": 16,
+      "description": "Set up Locomotion State Machine states",
+      "detailed_instructions": "Double-click the Locomotion state machine node to enter it. Create these states by right-clicking: (1) Idle (entry state), (2) WalkRun, (3) Sprint, (4) Crouch, (5) JumpStart, (6) JumpLoop, (7) JumpLand, (8) Slide. Set Idle as the default entry state. Each state will need an animation assigned later.",
+      "execution_method": "vision",
+      "verification": "8 state nodes visible inside Locomotion SM. Idle has entry arrow.",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "creation"
+    },
+    {
+      "index": 17,
+      "description": "Wire Locomotion state transitions",
+      "detailed_instructions": "Create transitions between states: Idle↔WalkRun (Speed threshold 10), WalkRun→Sprint (bIsSprinting), Sprint→WalkRun (!bIsSprinting), Any→JumpStart (JumpPhase==Start), JumpStart→JumpLoop (TimeInAir>0.15), JumpLoop→JumpLand (JumpPhase==Landing), JumpLand→Idle (auto), Any→Slide (bIsSliding), Slide→WalkRun (!bIsSliding), Any→Crouch (bIsCrouched AND Speed<10), Crouch→Idle (!bIsCrouched).",
+      "execution_method": "vision",
+      "verification": "All transition arrows visible between appropriate states",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "configuration"
+    },
+    {
+      "index": 18,
+      "description": "Final compile + save + PIE test",
+      "detailed_instructions": "F7 compile, Ctrl+S save. Then PIE test: equip a weapon, verify upper body changes pose. Sprint to verify low-ready alpha drops. Dodge to verify full body override.",
+      "execution_method": "vision",
+      "verification": "PIE: weapon equip changes upper body pose, sprint drops weapon, dodge overrides full body",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "verification"
+    }
+  ],
+  "warnings": [
+    "Step 3 (delete existing connections) may break current AnimGraph if one exists",
+    "Blend Poses by Int needs placeholder animations for pins 0-4 or they'll T-pose",
+    "State Machine states need actual animation sequences assigned to each state"
+  ],
+  "estimated_time_seconds": 900,
+  "rollback_strategy": "Close AnimBP without saving (Ctrl+Z repeatedly, or close tab and click 'Don't Save'). The C++ USWAnimInstance class is untouched."
+}

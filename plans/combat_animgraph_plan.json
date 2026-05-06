@@ -1,0 +1,105 @@
+{
+  "name": "Setup Combat AnimGraph and Fix Critical Issues",
+  "description": "Fix HIGH priority DirectionalLight mobility issue, set up complete combat AnimGraph for Sworder:721's ABP_SWCharacter, and address remaining doctor findings",
+  "research_summary": "Found setup_combat_animgraph.py script that handles the initial AnimBP validation and setup. Doctor findings show 1 HIGH priority DirectionalLight mobility issue and 4 MEDIUM priority animation issues. The user requests complete AnimGraph setup with exact node topology: Output Pose <- Slot 'DefaultSlot' <- Layered Blend Per Bone (lower: Locomotion SM, upper: Slot 'UpperBody' <- Blend Poses by Int by WeaponAnimType). All C++ state variables are already wired and updating every tick.",
+  "steps": [
+    {
+      "index": 1,
+      "description": "Fix HIGH priority DirectionalLight mobility issue causing spam logs",
+      "detailed_instructions": "Find all DirectionalLight actors in the current level and set their mobility to Movable to prevent 'Static light updated every frame' spam in PIE logs",
+      "execution_method": "ue5_python",
+      "script_content": "import unreal\n\n# Fix DirectionalLight mobility issue\nprint('=== FIXING DIRECTIONALLIGHT MOBILITY ===')\n\n# Get current level\nworld = unreal.EditorLevelLibrary.get_editor_world()\nif not world:\n    print('ERROR: No editor world found')\n    exit()\n\n# Find all DirectionalLight actors\nall_actors = unreal.EditorLevelLibrary.get_all_level_actors()\ndirectional_lights = [actor for actor in all_actors if isinstance(actor, unreal.DirectionalLight)]\n\nprint(f'Found {len(directional_lights)} DirectionalLight actors:')\n\nfor light in directional_lights:\n    light_name = light.get_name()\n    print(f'  - {light_name}')\n    \n    # Get the light component\n    light_comp = light.get_component_by_class(unreal.DirectionalLightComponent)\n    if light_comp:\n        # Set mobility to Movable\n        light_comp.set_mobility(unreal.ComponentMobility.MOVABLE)\n        print(f'    Set {light_name} mobility to Movable')\n    else:\n        print(f'    WARNING: No DirectionalLightComponent found on {light_name}')\n\n# Save the level\ntry:\n    unreal.EditorLevelLibrary.save_current_level()\n    print('Level saved successfully')\nexcept Exception as e:\n    print(f'Error saving level: {e}')\n\nprint('DirectionalLight mobility fix complete!')",
+      "verification": "Check PIE logs - should no longer see 'Static light updated every frame' warnings",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "configuration"
+    },
+    {
+      "index": 2,
+      "description": "Run setup_combat_animgraph.py to initialize AnimBP validation and setup",
+      "detailed_instructions": "Execute the existing setup script that validates AnimBP assets, checks skeleton compatibility, and opens the AnimBP editor for manual wiring",
+      "execution_method": "existing_script",
+      "existing_script": "setup_combat_animgraph.py",
+      "verification": "Script reports AnimBP validation status and opens ABP_SWCharacter in editor",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "verification"
+    },
+    {
+      "index": 3,
+      "description": "Create Locomotion State Machine with all required states",
+      "detailed_instructions": "1. Right-click on AnimGraph canvas, search 'Add New State Machine', name it 'Locomotion'\n2. Double-click to enter State Machine\n3. Right-click to add states: Idle, WalkRun, Sprint, Crouch, Slide, JumpStart, JumpLoop, JumpLand\n4. Connect Entry to Idle\n5. Set up transitions:\n   - Idle \u2194 WalkRun: Speed > 10 / Speed < 10\n   - WalkRun \u2194 Sprint: bIsSprinting == true / false\n   - Any \u2192 JumpStart: JumpPhase == Start\n   - JumpStart \u2192 JumpLoop: TimeInAir > 0.15\n   - JumpLoop \u2192 JumpLand: JumpPhase == Landing\n   - JumpLand \u2192 Idle: remaining time < 0.1\n   - Any \u2192 Slide: bIsSliding == true\n   - Slide \u2192 WalkRun: bIsSliding == false\n   - Any \u2192 Crouch: bIsCrouched == true AND Speed < 10\n   - Crouch \u2192 Idle: bIsCrouched == false\n6. Set WalkRun state to use existing BlendSpace\n7. Compile with F7",
+      "execution_method": "vision",
+      "verification": "State Machine shows all states with proper transitions, compiles without errors",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "creation"
+    },
+    {
+      "index": 4,
+      "description": "Create upper body weapon grip system with Blend Poses by Int",
+      "detailed_instructions": "1. Right-click on AnimGraph, search 'Blend Poses by int'\n2. In Details panel, set Active Child Index = WeaponAnimType\n3. Set Blend Time = 0.25\n4. Right-click the node to add pins until you have 5 inputs (0-4)\n5. Connect single-frame poses or cached poses to each pin:\n   - Pin 0: Unarmed idle pose\n   - Pin 1: Rifle hold pose\n   - Pin 2: Pistol hold pose\n   - Pin 3: Shotgun hold pose\n   - Pin 4: Melee/sword hold pose\n6. Add Slot node named 'UpperBody' after the Blend Poses by Int\n7. Set UpperBody slot: Group = DefaultGroup, Blend In = 0.10s, Blend Out = 0.20s",
+      "execution_method": "vision",
+      "verification": "Blend Poses by Int node has 5 input pins, WeaponAnimType variable connected, UpperBody slot properly configured",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "creation"
+    },
+    {
+      "index": 5,
+      "description": "Set up Layered Blend Per Bone for upper/lower body split",
+      "detailed_instructions": "1. Right-click AnimGraph, search 'Layered Blend Per Bone'\n2. Connect Locomotion State Machine output to Base Pose input\n3. Connect UpperBody slot system to Blend Poses 0 input\n4. In Details panel:\n   - Add Branch Filter: Bone Name = spine_01, Blend Depth = 1\n   - Check 'Mesh Space Rotation Blend' = TRUE\n   - Set Blend Weight = WeaponGripAlpha variable\n5. Verify the spine split works correctly",
+      "execution_method": "vision",
+      "verification": "Layered Blend Per Bone shows spine_01 branch filter, Mesh Space Rotation Blend enabled, WeaponGripAlpha connected",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "creation"
+    },
+    {
+      "index": 6,
+      "description": "Add DefaultSlot and connect to Output Pose",
+      "detailed_instructions": "1. Right-click AnimGraph, search 'Slot', add DefaultSlot\n2. Configure DefaultSlot: Group = DefaultGroup, Blend In = 0.15s, Blend Out = 0.25s\n3. Connect Layered Blend Per Bone output to DefaultSlot input\n4. Connect DefaultSlot output to Output Pose (final rightmost node)\n5. Compile with F7 to verify entire chain\n6. Save with Ctrl+S",
+      "execution_method": "vision",
+      "verification": "Complete chain: Locomotion SM \u2192 Layered Blend Per Bone \u2192 DefaultSlot \u2192 Output Pose, compiles successfully",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "creation"
+    },
+    {
+      "index": 7,
+      "description": "Fix enemy loot drop system",
+      "detailed_instructions": "Add SpawnLootDrop() call to SWEnemyBase::HandleDeath to fix enemies not dropping loot",
+      "execution_method": "ue5_python",
+      "script_content": "import unreal\n\n# This is a C++ fix that requires recompilation\n# For now, we'll log the issue and provide the exact fix needed\n\nprint('=== ENEMY LOOT DROP FIX REQUIRED ===')\nprint('LOCATION: Source/MyProject/Variant_Combat/AI/SWEnemyBase.cpp')\nprint('METHOD: SWEnemyBase::HandleDeath')\nprint('FIX: Add SpawnLootDrop() call in HandleDeath method')\nprint('')\nprint('C++ CODE TO ADD:')\nprint('void ASWEnemyBase::HandleDeath()')\nprint('{')\nprint('    // Existing death logic...')\nprint('    ')\nprint('    // ADD THIS LINE:')\nprint('    SpawnLootDrop();')\nprint('}')\nprint('')\nprint('NOTE: This requires C++ recompilation to take effect.')\nprint('After making the change, rebuild the project.')",
+      "verification": "C++ fix documented, requires manual edit and recompilation",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "verification"
+    },
+    {
+      "index": 8,
+      "description": "Add optional Aim Offset and Left Hand IK",
+      "detailed_instructions": "OPTIONAL ENHANCEMENTS (after basic chain works):\n1. Add Apply Additive node after DefaultSlot for Aim Offset:\n   - Connect AO_Trooper_Stand as additive input\n   - Set Alpha = AimOffsetAlpha variable\n2. Add Two Bone IK node for left hand:\n   - Set IK Bone = hand_l\n   - Set Effector Location = LeftHandIKLocation_CS\n   - Set Alpha = LeftHandIKAlpha variable\n3. Connect these enhancements before Output Pose\n4. Compile and test",
+      "execution_method": "vision",
+      "verification": "Optional: Aim Offset and Left Hand IK nodes added and functional",
+      "is_destructive": false,
+      "requires_app": "Unreal Engine 5",
+      "category": "creation"
+    }
+  ],
+  "prerequisites": [
+    "Unreal Engine 5 project loaded",
+    "ABP_SWCharacter AnimBP exists",
+    "USWAnimInstance C++ class with all state variables implemented",
+    "Trooper skeleton and animations available",
+    "BlendSpaces and montages created"
+  ],
+  "warnings": [
+    "Steps 3-6 require manual AnimGraph wiring in the editor",
+    "C++ enemy loot fix requires recompilation",
+    "Ensure all state variables are properly bound to AnimBP properties",
+    "Test each major step before proceeding to the next"
+  ],
+  "estimated_time_seconds": 1800,
+  "rollback_strategy": "AnimBP changes can be reverted via editor undo (Ctrl+Z). DirectionalLight mobility can be reset to Static if needed. C++ changes can be reverted via source control."
+}

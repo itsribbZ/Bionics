@@ -1,0 +1,16 @@
+{
+  "name": "scan_broken_blueprints",
+  "description": "Run BPDoctor — Bionics' 34-check Blueprint / AnimBP static analyzer. Scans every Blueprint in the open UE5 project for errors (missing parent class, null pin references, disconnected slots, empty state machines, MM schema problems, blend-weight sum violations, etc.). Read-only — no changes made. Run ue5_bpdoctor_fix_all after review.",
+  "steps": [
+    {"action": "ue5_native_status", "params": {}},
+    {"action": "ue5_bpdoctor_scan", "params": {}},
+    {"action": "ue5_bpdoctor_results", "params": {}}
+  ],
+  "prerequisites": [
+    "UE5 Editor open with any project loaded",
+    "BionicsBridge plugin installed and compiled"
+  ],
+  "warnings": [
+    "Scan can take 30-60s on a large project — this is normal."
+  ]
+}
