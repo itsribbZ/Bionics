@@ -151,13 +151,13 @@ def test_planner_integration_format():
 def test_diagnose_failclosed_unregistered_category():
     """P0: diagnose() must NOT report demo_ready on a category with zero checks.
 
-    ASSET has zero @check decorators today. The old code ran 0 checks and returned
-    demo_ready=True (vacuous all() over []), handing the skeletal-asset pipeline gate
+    MOVEMENT has zero @check decorators today (ASSET now has two). The old code ran 0
+    checks and returned demo_ready=True (vacuous all() over []), handing the pipeline gate
     a green light from no validation. The fail-closed guard turns that into a CRITICAL.
     """
     doctor = MVPDoctor(ue5_project_path=".")
-    diag = doctor.diagnose(categories=[Category.ASSET])
-    assert diag.checks_run == 0, "ASSET has no registered checks"
+    diag = doctor.diagnose(categories=[Category.MOVEMENT])
+    assert diag.checks_run == 0, "MOVEMENT has no registered checks"
     assert not diag.is_demo_ready, "empty check set must fail-closed, not vacuously pass"
     assert any(f.id == "NO_VALIDATOR_FOR_REQUESTED_CATEGORIES" for f in diag.findings)
     assert diag.critical_count >= 1
@@ -167,8 +167,8 @@ def test_diagnose_failclosed_unregistered_category():
 def test_diagnose_failclosed_string_category():
     """String category names coerce to enums; unknown strings fail-closed."""
     doctor = MVPDoctor(ue5_project_path=".")
-    # 'ASSET' (string) coerces to Category.ASSET — still zero checks -> fail-closed.
-    diag = doctor.diagnose(categories=["ASSET"])
+    # 'MOVEMENT' (string) coerces to Category.MOVEMENT — still zero checks -> fail-closed.
+    diag = doctor.diagnose(categories=["MOVEMENT"])
     assert not diag.is_demo_ready
     assert any(f.id == "NO_VALIDATOR_FOR_REQUESTED_CATEGORIES" for f in diag.findings)
     # Garbage string -> UNKNOWN_CATEGORY critical, never a vacuous pass.
@@ -190,6 +190,51 @@ def test_diagnose_runall_not_flagged():
     print("  runall_not_flagged: PASS")
 
 
+def _asset_doctor(tmp_path, fbx_flag_line="Interchange.FeatureFlags.Import.FBX=0"):
+    """Build an MVPDoctor over a fake project dir with an optional FBX flag line."""
+    (tmp_path / "Config").mkdir(exist_ok=True)
+    body = "[/Script/Engine.Engine]\n" + (f"{fbx_flag_line}\n" if fbx_flag_line else "")
+    (tmp_path / "Config" / "DefaultEngine.ini").write_text(body, encoding="utf-8")
+    return MVPDoctor(ue5_project_path=str(tmp_path))
+
+
+def test_asset_check_interchange_fbx_flag(tmp_path):
+    """The static asset-preflight: skeletal imports break silently without FBX=0."""
+    # Missing flag -> CRITICAL blocker.
+    diag = _asset_doctor(tmp_path, fbx_flag_line=None).diagnose(categories=[Category.ASSET])
+    assert any(f.id == "ASSET_INTERCHANGE_FBX_FLAG_MISSING" and f.severity == Severity.CRITICAL
+               for f in diag.findings)
+    assert not diag.is_demo_ready
+    # Wrong value -> CRITICAL.
+    diag2 = _asset_doctor(tmp_path, "Interchange.FeatureFlags.Import.FBX=1").diagnose(categories=[Category.ASSET])
+    assert any(f.id == "ASSET_INTERCHANGE_FBX_FLAG_WRONG" for f in diag2.findings)
+    # Correct value -> no interchange finding.
+    diag3 = _asset_doctor(tmp_path, "Interchange.FeatureFlags.Import.FBX=0").diagnose(categories=[Category.ASSET])
+    assert not any(f.id.startswith("ASSET_INTERCHANGE_FBX_FLAG") for f in diag3.findings)
+    print("  asset_interchange_flag: PASS")
+
+
+def test_asset_check_skeletal_presence(tmp_path):
+    """Pipeline-stage signal: INFO when zero SK_SW_ skeletal assets exist, gone once one lands."""
+    content = tmp_path / "Content"
+    content.mkdir(exist_ok=True)
+    diag = _asset_doctor(tmp_path).diagnose(categories=[Category.ASSET])
+    assert any(f.id == "ASSET_NO_SKELETAL_IN_ENGINE" for f in diag.findings)
+    # Land a skeletal asset -> the INFO signal clears (fresh doctor, fresh file cache).
+    (content / "SK_SW_Test.uasset").write_bytes(b"\x00")
+    diag2 = _asset_doctor(tmp_path).diagnose(categories=[Category.ASSET])
+    assert not any(f.id == "ASSET_NO_SKELETAL_IN_ENGINE" for f in diag2.findings)
+    print("  asset_skeletal_presence: PASS")
+
+
+def test_asset_category_now_has_checks(tmp_path):
+    """ASSET is no longer a zero-check category — NO_VALIDATOR must NOT fire for it."""
+    diag = _asset_doctor(tmp_path).diagnose(categories=[Category.ASSET])
+    assert diag.checks_run >= 2, "ASSET should run its registered checks"
+    assert not any(f.id == "NO_VALIDATOR_FOR_REQUESTED_CATEGORIES" for f in diag.findings)
+    print("  asset_has_checks: PASS")
+
+
 if __name__ == "__main__":
     print("MVP Doctor Tests:")
     test_diagnosis_data_model()
@@ -200,4 +245,10 @@ if __name__ == "__main__":
     test_diagnose_failclosed_unregistered_category()
     test_diagnose_failclosed_string_category()
     test_diagnose_runall_not_flagged()
+    import tempfile
+    with tempfile.TemporaryDirectory() as _td:
+        _tp = Path(_td)
+        test_asset_check_interchange_fbx_flag(_tp)
+        test_asset_check_skeletal_presence(_tp)
+        test_asset_category_now_has_checks(_tp)
     print("\nAll tests passed.")

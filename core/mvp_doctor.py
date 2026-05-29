@@ -323,6 +323,94 @@ class MVPDoctor:
     # Diagnostic checks
     # ------------------------------------------------------------------
 
+    @check("Interchange FBX Importer Disabled", Category.ASSET)
+    def check_interchange_fbx_flag(self) -> list[Finding]:
+        """Skeletal FBX from Blender 5.1 imports correctly ONLY when the legacy
+        importer is forced via `Interchange.FeatureFlags.Import.FBX=0` in
+        DefaultEngine.ini (SKELETAL_PIPELINE.md import section). If the flag is
+        missing or not 0, skeletal imports silently use the broken Interchange path
+        and the whole asset rail fails open before it ever reaches PIE.
+
+        This is the engine-free half of the asset preflight — a pure static read of
+        Config/DefaultEngine.ini. The in-engine bone-integrity validator (bone count,
+        physics asset, retarget source against MANNEQUIN_CORE_BONES) is the :8090
+        AssetDoctor half and requires a live editor.
+        """
+        ini = self._project / "Config" / "DefaultEngine.ini"
+        content = self._read_file(ini)
+        if not content:
+            return [Finding(
+                id="ASSET_NO_DEFAULTENGINE_INI",
+                title="DefaultEngine.ini not found — cannot verify skeletal import config",
+                description=(
+                    f"Expected {ini}. The skeletal-import preflight cannot confirm the legacy "
+                    "FBX importer is forced, so a skeletal import could silently fail."
+                ),
+                severity=Severity.HIGH,
+                category=Category.ASSET,
+                fix_method=FixMethod.EDITOR_MANUAL,
+                fix_hint="Confirm the UE5 project path; ensure Config/DefaultEngine.ini has Interchange.FeatureFlags.Import.FBX=0",
+                file_path=str(ini),
+            )]
+        m = re.search(r"^\s*Interchange\.FeatureFlags\.Import\.FBX\s*=\s*(\d+)", content, re.MULTILINE)
+        if m is None:
+            return [Finding(
+                id="ASSET_INTERCHANGE_FBX_FLAG_MISSING",
+                title="Interchange FBX import flag absent — skeletal imports will use the broken path",
+                description=(
+                    "Interchange.FeatureFlags.Import.FBX=0 is missing from DefaultEngine.ini. "
+                    "Blender 5.1 FBX skeletal exports import correctly only via the legacy importer; "
+                    "without this flag the Interchange importer silently mangles or drops the skeleton."
+                ),
+                severity=Severity.CRITICAL,
+                category=Category.ASSET,
+                fix_method=FixMethod.EDITOR_MANUAL,
+                fix_hint="Add `Interchange.FeatureFlags.Import.FBX=0` to Config/DefaultEngine.ini",
+                file_path=str(ini),
+            )]
+        if m.group(1) != "0":
+            return [Finding(
+                id="ASSET_INTERCHANGE_FBX_FLAG_WRONG",
+                title=f"Interchange FBX import flag is {m.group(1)}, must be 0",
+                description=(
+                    "Interchange.FeatureFlags.Import.FBX must be 0 to force the legacy FBX importer. "
+                    f"It is currently {m.group(1)} — skeletal imports from Blender will use the broken "
+                    "Interchange path and fail open."
+                ),
+                severity=Severity.CRITICAL,
+                category=Category.ASSET,
+                fix_method=FixMethod.EDITOR_MANUAL,
+                fix_hint="Set Interchange.FeatureFlags.Import.FBX=0 in Config/DefaultEngine.ini",
+                file_path=str(ini),
+                line_number=self._find_line(ini, "Interchange.FeatureFlags.Import.FBX"),
+            )]
+        return []
+
+    @check("Skeletal Assets In Engine", Category.ASSET)
+    def check_skeletal_assets_present(self) -> list[Finding]:
+        """Pipeline-stage signal: how many SK_SW_ skeletal meshes have landed in
+        /Game. The idea->playable pivotal unlock (M5) is 'one green skeletal asset in
+        PIE'; zero means the skeletal rail has not produced its first asset yet.
+        Informational — does not block the demo on its own (static meshes import fine).
+        """
+        if not self._content.exists():
+            return []
+        if not any(self._content.rglob("SK_SW_*.uasset")):
+            return [Finding(
+                id="ASSET_NO_SKELETAL_IN_ENGINE",
+                title="No SK_SW_ skeletal mesh assets in /Game yet",
+                description=(
+                    "Zero SK_SW_*.uasset skeletal meshes found under Content. The skeletal asset "
+                    "rail (Blender -> :8090 import -> IKRig -> PIE) has not produced its first "
+                    "asset — the M5 pivotal unlock is not yet reached."
+                ),
+                severity=Severity.INFO,
+                category=Category.ASSET,
+                fix_method=FixMethod.NONE,
+                fix_hint="Run the uasvc skeletal import (Build A) once UE5 is open to land the first SK_SW_ asset",
+            )]
+        return []
+
     @check("DirectionalLight Mobility", Category.EDITOR)
     def check_directional_light(self) -> list[Finding]:
         """Check if DirectionalLight is spawned as Movable (not Static)."""
