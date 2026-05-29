@@ -29,6 +29,26 @@ if str(REPO) not in sys.path:
 _DEFAULT_MESH = "/Game/Test/Skel/SK_SW_HumanoidTemplate/SkeletalMeshes/SK_SW_HumanoidTemplate"
 
 
+def _invoke_and_print(fn, args, label: str):
+    """Fire the autorig tool once and print its verdict; return (result, data)."""
+    print(f"\n== autorig live-fire [{label}] ==\n  mesh : {args.mesh}\n  dest : {args.ikrig_dest}")
+    result = fn(skeletal_mesh_path=args.mesh, ikrig_dest=args.ikrig_dest, timeout_s=args.timeout)
+    d = result.data or {}
+    print(f"  result.ok        = {result.ok}")
+    print(f"  humanoid         = {d.get('humanoid')}")
+    print(f"  bone_count       = {d.get('bone_count')} (method={d.get('bone_method')})")
+    print(f"  mannequin_missing= {d.get('mannequin_missing')}")
+    print(f"  ikrig_path       = {d.get('ikrig_path')}")
+    print(f"  chains           = {d.get('configured_count')}/9 "
+          f"(verified {d.get('verified_count')}, unique {d.get('unique_verified_count')}, "
+          f"cleared {d.get('cleared_count')})")
+    print(f"  stage            = {d.get('stage')}")
+    print(f"  errors           = {d.get('errors')}")
+    if not result.ok:
+        print(f"  (failure)        = {result.error}")
+    return result, d
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Live-fire the autorig validate+IKRig tool")
     ap.add_argument("--mesh", default=_DEFAULT_MESH, help="UE content path to the SkeletalMesh")
@@ -36,25 +56,34 @@ def main() -> int:
     ap.add_argument("--timeout", type=float, default=120.0, help="Seconds to wait for the deferred rig")
     ap.add_argument("--negative", action="store_true",
                     help="Treat a clean fail-closed (non-humanoid) verdict as PASS")
+    ap.add_argument("--idempotency", action="store_true",
+                    help="Run TWICE and assert the rebuild stays exactly 9 chains (dup-pollution regression)")
     args = ap.parse_args()
 
     from bionics_tools.ue5_autorig import ue5_autorig_humanoid
 
-    print(f"== autorig live-fire ==\n  mesh : {args.mesh}\n  dest : {args.ikrig_dest}")
-    result = ue5_autorig_humanoid(
-        skeletal_mesh_path=args.mesh, ikrig_dest=args.ikrig_dest, timeout_s=args.timeout
-    )
-    d = result.data or {}
-    print(f"\n  result.ok        = {result.ok}")
-    print(f"  humanoid         = {d.get('humanoid')}")
-    print(f"  bone_count       = {d.get('bone_count')} (method={d.get('bone_method')})")
-    print(f"  mannequin_missing= {d.get('mannequin_missing')}")
-    print(f"  ikrig_path       = {d.get('ikrig_path')}")
-    print(f"  chains           = {d.get('configured_count')}/9 (verified {d.get('verified_count')})")
-    print(f"  stage            = {d.get('stage')}")
-    print(f"  errors           = {d.get('errors')}")
-    if not result.ok:
-        print(f"  (failure)        = {result.error}")
+    # ── Idempotency mode: the 27-chain dup-pollution regression gate (Rule #13 front-to-back).
+    # Run 1 builds the rig; Run 2 must clear the prior 9 and rebuild to exactly 9 (never 18/27).
+    if args.idempotency:
+        r1, d1 = _invoke_and_print(ue5_autorig_humanoid, args, "run 1 (build)")
+        if not r1.ok or d1.get("verified_count") != 9:
+            print("\nFAIL: run 1 did not produce a clean 9-chain rig — cannot test idempotency.")
+            return 1
+        r2, d2 = _invoke_and_print(ue5_autorig_humanoid, args, "run 2 (rebuild)")
+        ok = (
+            r2.ok
+            and d2.get("verified_count") == 9
+            and d2.get("unique_verified_count") == 9
+            and d2.get("cleared_count") == 9  # run 2 must have removed run 1's 9 chains first
+        )
+        if ok:
+            print("\nPASS: re-run cleared 9 + rebuilt to exactly 9 — no dup pollution (9, not 18/27).")
+            return 0
+        print(f"\nFAIL: re-run did not stay at 9 — verified={d2.get('verified_count')} "
+              f"cleared={d2.get('cleared_count')} (the dup-pollution bug). ")
+        return 1
+
+    result, d = _invoke_and_print(ue5_autorig_humanoid, args, "single")
 
     bridge_down = "could not queue" in (result.error or "") or "Timed out" in (result.error or "")
 

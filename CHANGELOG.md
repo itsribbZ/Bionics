@@ -2,6 +2,24 @@
 
 All notable changes to Bionics will be listed here. Semver: MAJOR.MINOR.PATCH.
 
+## [0.8.3] — 2026-05-29 (autorig idempotency — the 27/36-chain dup-pollution retarget blocker eliminated)
+
+PATCH bump: makes `ue5_autorig_humanoid` idempotent. Live-verified against UE5 5.7 + BionicsBridge `:8090` (self-healed a 36-chain polluted rig → 9; a re-run holds at exactly 9).
+
+### Fixed — re-running autorig no longer stacks duplicate IKRig chains (the retarget blocker)
+- `bionics_tools/ue5_autorig.py`: the embedded UE5 validate+rig script loaded a pre-existing IKRig and re-added all 9 retarget chains UNCONDITIONALLY. `IKRigController.add_retarget_chain` APPENDS (no dedup by name), so re-runs stacked 9 → 18 → 27(+) — the wild `IKR_SW_HumanoidTemplate` carried **36** chains. The loose `verified >= 9` gate rubber-stamped it, and the duplicate source/target chain names broke the downstream IK Retargeter. Now: clear all existing chains, **re-query and assert the rig is actually empty before rebuilding** (abort fail-closed if anything survived — gates on the real post-clear residual, never the ambiguous `remove_retarget_chain` bool); the UE5-side gate requires **exactly 9 unique**; and a **host-side backstop** independently rejects any count not in {0,9}, any non-{0,9} unique count, a count≠unique mismatch, or an incomplete clear.
+- **Receipt**: `scripts/livefire_autorig.py --idempotency` over `:8090` — run 1 self-healed 36 → 9, run 2 held at 9/9 unique. A 3-lens adversarial-review workflow (correctness / UE5.7-API / regression) caught 2 MEDIUM holes (partial-clear + empty-re-query false-pass; count-only backstop missing the dup-at-9 case) that pytest + the first-pass live-fire both missed — both folded in.
+
+### Tests (+5, 530 → 535 GREEN)
+- `tests/test_ue5_autorig.py`: clear-count surfaced; host backstop rejects 18 and the dup-at-9 (`verified=9`/`unique=8`) case; rejects an incomplete clear; and correctly allows `verified_count=0` (the legit re-query-failed fallback).
+- `scripts/livefire_autorig.py`: new `--idempotency` mode (Rule #13 front-to-back: run twice, assert it stays exactly 9 / `cleared==9`).
+
+### UE5.7 API (live-introspected against the running editor)
+- `IKRigController`: `add_retarget_chain(name,start,end,goal)->Name` (APPENDS), `remove_retarget_chain(name)->bool`, `get_retarget_chains()->Array[BoneChain]` (each has `.chain_name`).
+
+### Unblocks
+- The M5 idea→playable tail: IK Retargeter → AnimBP wire → PIE spawn → perf gauntlet (the rig is now guaranteed clean).
+
 ## [0.8.2] — 2026-05-29 (MVP Doctor diagnose-time AnimBP execution goes native :8090)
 
 PATCH bump: extends the v0.8.1 native-first routing to the MVP Doctor's own in-engine execution. Live-verified against UE5 5.7 + BionicsBridge :8090.

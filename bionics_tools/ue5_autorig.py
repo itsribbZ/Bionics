@@ -8,7 +8,15 @@ a rig). See feedback_ue5_skeletal_pipeline_proven_2026_05_28.
 Fail-closed BOTH ways (kills the upstream WARN-and-continue false-pass):
   - bone extraction returns nothing            -> FAIL (cannot validate, do not rig)
   - missing any Mannequin core bone (humanoid) -> ABORT, never build a broken rig
-  - IKRig chains re-queried after add          -> ok only if all 9 resolve
+  - IKRig chains re-queried after add          -> ok only if EXACTLY 9 unique resolve
+
+Idempotent (the retarget blocker fix): add_retarget_chain APPENDS, so re-running the old
+build stacked 9 -> 18 -> 27 duplicate chains and the loose `verified >= 9` gate rubber-stamped
+it, breaking the downstream IK Retargeter. The build now clears all existing retarget chains
+and RE-QUERIES to assert the rig is actually empty before rebuilding — aborting fail-closed if
+any chain survived the clear, so an already-polluted rig self-heals for real, not best-effort.
+The UE5-side gate requires exactly 9 unique; and a host-side backstop independently rejects any
+count not in {0,9}, any non-{0,9} unique count, a count/unique mismatch, or an incomplete clear.
 
 Transport mirrors ue5_uasvc (deferred ``py exec`` over :8090 + delete-then-poll a result
 file); the fire-and-poll + scratch-dir helpers now live in the shared
@@ -155,6 +163,58 @@ def run():
     except Exception as e:  # noqa: BLE001
         RES["errors"].append("set_skeletal_mesh: " + str(e))
 
+    # IDEMPOTENCY (fixes the 27-chain dup-pollution retarget blocker): add_retarget_chain
+    # APPENDS — it does not dedup by name — so re-running autorig on an existing IKRig stacked
+    # 9 -> 18 -> 27 duplicate chains. The old `verified >= 9` gate passed that as ok=True, then
+    # the duplicated source/target chain names broke the downstream IK Retargeter. Clear ALL
+    # existing retarget chains FIRST so a rebuild always lands EXACTLY the canonical 9 and an
+    # already-polluted rig self-heals. remove_retarget_chain(chain_name) -> bool (UE5.7-verified).
+    cleared = []
+    try:
+        existing = [str(getattr(c, "chain_name", c)) for c in (ctrl.get_retarget_chains() or [])]
+        for nm in existing:  # iterate a snapshot — don't mutate the live array mid-loop
+            try:
+                if ctrl.remove_retarget_chain(nm):
+                    cleared.append(nm)
+                else:
+                    RES["errors"].append(f"remove_retarget_chain returned False for '{nm}'")
+            except Exception as e:  # noqa: BLE001
+                RES["errors"].append(f"remove chain {nm}: {e}")
+    except Exception as e:  # noqa: BLE001
+        RES["errors"].append("pre-clear get_retarget_chains: " + str(e))
+
+    # The self-heal must be LITERAL, not best-effort: re-query and assert the rig is actually
+    # empty before rebuilding. A remove_retarget_chain that returned False/threw, or an
+    # enumerate that failed, can leave stale chains; rebuilding on top of them is the exact
+    # 18-chain dup pollution this fix exists to prevent. Gate on the REAL residual state (not
+    # the ambiguous remove return — under duplicate names a remove is False precisely because
+    # the chain is already gone). If anything survived, ABORT before adding (FAIL-CLOSED).
+    cleared_incomplete = False
+    try:
+        residual = [str(getattr(c, "chain_name", c)) for c in (ctrl.get_retarget_chains() or [])]
+    except Exception as e:  # noqa: BLE001
+        residual = []
+        cleared_incomplete = True
+        RES["errors"].append("post-clear re-query failed (cannot confirm empty slate): " + str(e))
+    if residual:
+        cleared_incomplete = True
+        RES["errors"].append(
+            f"pre-clear incomplete — {len(residual)} chain(s) survived removal {residual[:10]}; "
+            "aborting before rebuild to avoid dup pollution (FAIL-CLOSED)"
+        )
+    if cleared_incomplete:
+        RES["stage"] = "pre-clear-incomplete"
+        RES["ikrig"] = {
+            "path": ikrig.get_path_name(),
+            "cleared_pre_existing": cleared,
+            "cleared_count": len(cleared),
+            "cleared_incomplete": True,
+            "configured_count": 0,
+            "verified_count": 0,
+            "unique_verified_count": 0,
+        }
+        return
+
     configured = []
     for name, start, end in CHAINS:
         try:
@@ -172,20 +232,39 @@ def run():
     except Exception as e:  # noqa: BLE001
         RES["errors"].append("get_retarget_chains: " + str(e))
 
+    # Anomaly surface (Rule #5 — diagnostics are features): an empty re-query right after N
+    # successful adds means the gate has to trust adds it could not confirm. Make that visible
+    # so live-fire can chase the IKRigController API contract rather than silently trusting it.
+    if configured and not verified:
+        RES["errors"].append(
+            f"re-query returned no chains after {len(configured)} adds — trusting adds unconfirmed "
+            "(verify the IKRigController API contract)"
+        )
+
     try:
         unreal.EditorAssetLibrary.save_asset(ikrig.get_path_name())
     except Exception as e:  # noqa: BLE001
         RES["errors"].append("save_asset: " + str(e))
 
+    unique_verified = set(verified)
     RES["ikrig"] = {
         "path": ikrig.get_path_name(),
         "configured": configured,
         "configured_count": len(configured),
         "verified_chains": verified,
         "verified_count": len(verified),
+        "unique_verified_count": len(unique_verified),
+        "cleared_pre_existing": cleared,
+        "cleared_count": len(cleared),
+        "cleared_incomplete": False,
     }
-    # ok requires all 9 added AND (if re-query worked) all 9 verified present.
-    chains_ok = len(configured) == 9 and (len(verified) >= 9 or not verified)
+    # ok requires the canonical 9 added AND — when the re-query works — EXACTLY 9 UNIQUE chains
+    # present (no dup pollution). The `not verified` fallback trusts the 9 adds ONLY if
+    # get_retarget_chains() itself failed/returned nothing (API quirk) — never to excuse dups.
+    if verified:
+        chains_ok = len(configured) == 9 and len(verified) == 9 and len(unique_verified) == 9
+    else:
+        chains_ok = len(configured) == 9
     RES["ok"] = chains_ok
     RES["stage"] = "done"
 
@@ -329,12 +408,41 @@ def ue5_autorig_humanoid(
         "ikrig_path": ikrig.get("path"),
         "configured_count": ikrig.get("configured_count"),
         "verified_count": ikrig.get("verified_count"),
+        "unique_verified_count": ikrig.get("unique_verified_count"),
+        "cleared_count": ikrig.get("cleared_count"),
+        "cleared_incomplete": ikrig.get("cleared_incomplete"),
         "stage": data.get("stage"),
         "errors": errors,
         "skeletal_mesh_path": skeletal_mesh_path,
         "ikrig_name": ikrig_name,
         "result_file": str(result_path),
     }
+
+    # Host backstop (defense-in-depth vs a UE5-side gate regression): the rig must land EXACTLY
+    # the canonical 9 UNIQUE chains. It must replicate every clause of the UE5-side gate so it
+    # still catches the dup state if that gate regresses — count alone is not enough, because the
+    # duplicate chain NAMES are what break the IK Retargeter (a 9-entry/8-unique rig is broken):
+    #   - verified_count 0  = re-query failed (allowed — UE5-side trusts the 9 adds)
+    #   - verified_count 9 AND unique 9 = good
+    #   - 18/27 (count) OR 9-count/<9-unique (dup-at-9) OR count != unique = dup pollution -> reject
+    #   - cleared_incomplete = stale chains survived the pre-clear -> reject (never ship a stacked rig)
+    vc = ikrig.get("verified_count")
+    uv = ikrig.get("unique_verified_count")
+    dup_count = isinstance(vc, int) and vc not in (0, 9)
+    dup_unique = isinstance(uv, int) and uv not in (0, 9)
+    dup_mismatch = isinstance(vc, int) and isinstance(uv, int) and vc != uv
+    if bool(data.get("ok")) and (dup_count or dup_unique or dup_mismatch or ikrig.get("cleared_incomplete")):
+        reason = (
+            f"dup-pollution backstop: verified={vc} unique={uv} "
+            f"cleared_incomplete={ikrig.get('cleared_incomplete')} — rig is not exactly the canonical "
+            "9 unique chains (the 27-chain retarget blocker — UE5-side gate should have caught this)"
+        )
+        return ToolResult(
+            ok=False,
+            content=f"Autorig of {ikrig_name} rejected: not exactly 9 unique chains (verified={vc} unique={uv}).",
+            data=payload,
+            error=reason,
+        )
 
     # Fail-closed: the seed's RES["ok"] is True only on humanoid + 9 configured + verified.
     if bool(data.get("ok")):
