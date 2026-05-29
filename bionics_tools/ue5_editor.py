@@ -416,7 +416,17 @@ except Exception as _se:
     title="Trigger Live Coding",
 )
 def ue5_live_coding() -> ToolResult:
-    """Trigger Live Coding hot reload (Ctrl+Alt+F11)."""
+    """Trigger Live Coding hot reload (Ctrl+Alt+F11).
+
+    T1.A native-first re-route (godspeed 2026-05-15): tries C++ :8090 bridge
+    first (returns structured module_loaded + triggered fields, ~5-20ms vs
+    100-400ms Python-RE). Falls back to Python remote-exec when bridge is
+    unreachable. See `feedback_routing_matrix_correction.md`.
+    """
+    from bionics_tools.ue5_native import call_bridge_tool
+    native = call_bridge_tool("live_coding_compile", {})
+    if native.ok or "Bridge unreachable" not in (native.error or ""):
+        return native
     body = """
 try:
     unreal.SystemLibrary.execute_console_command(None, 'LiveCoding.Compile')

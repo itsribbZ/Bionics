@@ -10,6 +10,7 @@
 #include "Tools/SetConsoleVarTool.h"
 #include "Tools/ExecuteConsoleCommandTool.h"
 #include "Tools/GetProjectInfoTool.h"
+#include "Tools/LogTailTool.h"
 
 DEFINE_LOG_CATEGORY(LogBionicsBridge);
 
@@ -31,6 +32,7 @@ void FBionicsBridgeModule::StartupModule()
 	Registry.RegisterToolClass<USetConsoleVarTool>();
 	Registry.RegisterToolClass<UExecuteConsoleCommandTool>();
 	Registry.RegisterToolClass<UGetProjectInfoTool>();
+	Registry.RegisterToolClass<ULogTailTool>();
 
 	UE_LOG(LogBionicsBridge, Log, TEXT("Registered %d runtime tools"), Registry.Num());
 }

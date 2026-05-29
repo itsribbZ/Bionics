@@ -3,10 +3,10 @@
 Native HTTP bridge plugin that exposes UE5 editor + runtime automation to
 the Bionics CLI/MCP server over JSON-RPC 2.0 on localhost.
 
-**Why this exists:** Python Remote Execution has 100-400ms round-trip latency
-and only works in the editor. This C++ plugin:
+**Why this exists:** Python Remote Execution has an estimated ~100-400ms round-trip
+latency and only works in the editor. This C++ plugin is architecturally expected to:
 
-- **5-20ms** native round-trip latency
+- deliver **~5-20ms** native round-trip latency (in-process loopback HTTP vs Python remote-exec) — benchmark pending
 - **Works in packaged builds** (runtime module) and editor (editor module)
 - **No Python dependency** — direct UE API calls on the game thread
 - **Self-discovery** — writes `<ProjectDir>/.bionics-bridge/instance.json`
@@ -40,7 +40,7 @@ Look for:
 
 ```
 LogBionicsBridge: Bridge server started on http://127.0.0.1:8090/bridge
-LogBionicsBridge: Editor tools registered. Total tools: 10
+LogBionicsBridge: Editor tools registered. Total tools: 27 (5 general + 13 animgraph + 5 eventgraph + 4 bpdoctor)
 ```
 
 ### 5. Verify from Bionics CLI
@@ -160,7 +160,7 @@ tools from any subdirectory of your UE5 project.
 ## Security
 
 - **Localhost-only bind** — the HTTP server only accepts `127.0.0.1` connections
-- **No authentication** — designed for local-only use. Do not expose externally.
+- **Bearer-token authentication** — `POST /bridge` requires `Authorization: Bearer <token>`; the token is generated per-instance and written to `<ProjectDir>/.bionics-bridge/instance.json`. An empty token disables auth (dev/test only — warned at startup). Designed for local-only use; do not expose externally.
 - **CORS enabled** — for browser clients running on localhost
 - **Game-thread marshaling** — all tool execution respects UE thread safety
 

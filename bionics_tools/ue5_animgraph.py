@@ -248,6 +248,113 @@ def ue5_add_state_transition(
 
 
 # ============================================================================
+# T-BRIDGE-1 WIRING TOOLS — close the manual-editor handoff gap
+# ============================================================================
+
+
+@bionics_tool(
+    name="ue5_set_bone_reference",
+    category="ue5_animgraph",
+    safety_tier=SafetyTier.MODERATE,
+    read_only=False,
+    strict=True,
+    aliases=["set-bone-reference", "set-bone-ref"],
+    title="Set Bone Reference",
+)
+def ue5_set_bone_reference(
+    asset_path: Annotated[str, "AnimBP path"],
+    node_name: Annotated[str, "AnimGraph node name (e.g. AnimGraphNode_ModifyBone_0)"],
+    bone_name: Annotated[str, "Bone name on the AnimBP's TargetSkeleton"],
+    bone_property: Annotated[str, "FBoneReference field on inner FAnimNode"] = "BoneToModify",
+) -> ToolResult:
+    """Set an FBoneReference field on an AnimGraph node, resolving MeshBoneIndex
+    against the AnimBP's TargetSkeleton.
+
+    Closes T-BRIDGE-1 hole #1. Common targets:
+      - ModifyBone.BoneToModify (default)
+      - TwoBoneIK.IKBone, TwoBoneIK.JointTargetLocationBone
+      - SkeletalControl variants with FBoneReference fields
+
+    Returns bone_index resolved on the skeleton — INDEX_NONE means the bone
+    name isn't on this skeleton (bridge surfaces a clean error).
+    """
+    return _call_tool("set_bone_reference", {
+        "asset_path": asset_path,
+        "node_name": node_name,
+        "bone_property": bone_property,
+        "bone_name": bone_name,
+    })
+
+
+@bionics_tool(
+    name="ue5_bind_pin_to_property",
+    category="ue5_animgraph",
+    safety_tier=SafetyTier.MODERATE,
+    read_only=False,
+    strict=True,
+    aliases=["bind-pin", "bind-pin-to-property"],
+    title="Bind Pin to Property",
+)
+def ue5_bind_pin_to_property(
+    asset_path: Annotated[str, "AnimBP path"],
+    node_name: Annotated[str, "AnimGraph node name"],
+    pin_name: Annotated[str, "Input pin name to bind (e.g. 'bIsCrouched', 'Alpha')"],
+    source_variable: Annotated[str, "AnimInstance member variable name"],
+) -> ToolResult:
+    """Bind an AnimGraph node input pin to a UAnimInstance member variable —
+    the editor "right-click pin → Bind to <variable>" action.
+
+    Closes T-BRIDGE-1 hole #2. Verifies the variable exists on the AnimBP class
+    hierarchy before binding (fails clean if missing). Implementation uses
+    UAnimGraphNode_Base::PropertyBindings (PropertyAccess type).
+    """
+    return _call_tool("bind_pin_to_property", {
+        "asset_path": asset_path,
+        "node_name": node_name,
+        "pin_name": pin_name,
+        "source_variable": source_variable,
+    })
+
+
+@bionics_tool(
+    name="ue5_splice_pose_flow",
+    category="ue5_animgraph",
+    safety_tier=SafetyTier.MODERATE,
+    read_only=False,
+    strict=True,
+    aliases=["splice-pose", "splice-pose-flow"],
+    title="Splice Pose Flow",
+)
+def ue5_splice_pose_flow(
+    asset_path: Annotated[str, "AnimBP path"],
+    source_node: Annotated[str, "Existing source node name (output side)"],
+    source_pin: Annotated[str, "Output pin on source node"],
+    sink_node: Annotated[str, "Existing sink node name (input side)"],
+    sink_pin: Annotated[str, "Input pin on sink node"],
+    splice_node: Annotated[str, "New node to insert"],
+    splice_input_pin: Annotated[str, "Input pin on splice node (receives source)"],
+    splice_output_pin: Annotated[str, "Output pin on splice node (drives sink)"],
+) -> ToolResult:
+    """Atomic insert: break existing source→sink wire (if any), then wire
+    source→splice.in and splice.out→sink.
+
+    Closes T-BRIDGE-1 hole #3. Returns broke_existing_wire (false = first-time
+    wiring, no break needed). Use when adding LayeredBlendPerBone, Inertialization,
+    or any pose-modifying node into an existing chain (e.g. UpperBody slot fix).
+    """
+    return _call_tool("splice_pose_flow", {
+        "asset_path": asset_path,
+        "source_node": source_node,
+        "source_pin": source_pin,
+        "sink_node": sink_node,
+        "sink_pin": sink_pin,
+        "splice_node": splice_node,
+        "splice_input_pin": splice_input_pin,
+        "splice_output_pin": splice_output_pin,
+    })
+
+
+# ============================================================================
 # BPDOCTOR INTEGRATION
 # ============================================================================
 

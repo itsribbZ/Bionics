@@ -3,7 +3,7 @@
 Unlike the Python Remote Execution bridge (ue5_actor, ue5_blueprint, etc.),
 these tools hit the C++ plugin via HTTP JSON-RPC on localhost:8090. Benefits:
 
-    • 5-20ms round-trip (vs 100-400ms for Python RE)
+    • architecturally expected ~5-20ms round-trip (in-process loopback HTTP vs ~100-400ms Python RE) — benchmark pending
     • Works in packaged builds (not just editor)
     • Structured JSON responses with proper error handling
     • No UE5 Python plugin dependency
@@ -241,7 +241,7 @@ def ue5_native_spawn_actor(
     label: str = "",
     editor_world: Annotated[bool, "Spawn in editor world (vs PIE/game)"] = True,
 ) -> ToolResult:
-    """Spawn an actor in UE5 via the native C++ bridge (~5-20ms)."""
+    """Spawn an actor in UE5 via the native C++ bridge (architecturally ~5-20ms, est.)."""
     loc = location if location else [0.0, 0.0, 0.0]
     rot = rotation if rotation else [0.0, 0.0, 0.0]
     if len(loc) < 3 or len(rot) < 3:
@@ -348,4 +348,59 @@ def ue5_native_query_assets(
         "class_name": class_name,
         "path_prefix": path_prefix,
         "limit": max(1, min(int(limit), 1000)),
+    })
+
+
+@bionics_tool(
+    name="ue5_native_live_coding_compile",
+    category="ue5_build",
+    safety_tier=SafetyTier.MODERATE,
+    aliases=["live-coding-compile", "ue5-live-coding-native"],
+    title="Live Coding Compile (Native)",
+)
+def ue5_native_live_coding_compile() -> ToolResult:
+    """Trigger Live Coding hot reload via native C++ bridge (Ctrl+Alt+F11 equivalent).
+
+    Bypasses the Python remote-exec dispatch in ue5_live_coding(). Single bridge
+    round-trip (~5-20ms). Returns module_loaded + triggered fields; if the
+    LiveCoding plugin is not loaded, surfaces "Edit → Plugins → Programming →
+    Live Coding" hint cleanly. The compile itself is async — check the editor
+    toast for the result.
+    """
+    return _call_tool("live_coding_compile", {})
+
+
+@bionics_tool(
+    name="ue5_native_log_tail",
+    category="ue5_debug",
+    safety_tier=SafetyTier.SAFE,
+    read_only=True,
+    aliases=["log-tail", "ue5-log-tail"],
+    title="Log Tail (Native)",
+)
+def ue5_native_log_tail(
+    since_cursor: Annotated[int, "Byte offset to start reading from. 0 = read last max_bytes."] = 0,
+    filter_regex: Annotated[str, "Optional regex; only matching lines returned."] = "",
+    max_lines: Annotated[int, "Cap on returned lines (1-10000)."] = 500,
+    max_bytes: Annotated[int, "Cap on bytes read per call (1024-16MB)."] = 1048576,
+    log_path: Annotated[str, "Explicit path; default <ProjectDir>/Saved/Logs/<ProjectName>.log"] = "",
+) -> ToolResult:
+    """Tail Saved/Logs/<ProjectName>.log via native C++ bridge.
+
+    Poll-based streaming. First call: pass since_cursor=0 to get the last
+    max_bytes worth of log content (partial first line dropped). Subsequent
+    calls: pass the returned cursor to get only new lines since that point.
+    Use filter_regex to server-side-filter (e.g. r"\\[WEAPON DIAG\\]|\\[AltitudeTransition\\]")
+    so only relevant lines hit the wire.
+
+    Returns: lines (list[str]), cursor (int), file_size (int), line_count (int),
+    truncated (bool), rotated (bool — true if file shrank since last cursor),
+    log_path (str — absolute resolved path actually read).
+    """
+    return _call_tool("log_tail", {
+        "since_cursor": max(0, int(since_cursor)),
+        "filter_regex": filter_regex,
+        "max_lines": max(1, min(int(max_lines), 10000)),
+        "max_bytes": max(1024, min(int(max_bytes), 16 * 1024 * 1024)),
+        "log_path": log_path,
     })

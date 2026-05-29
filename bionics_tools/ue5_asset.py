@@ -139,7 +139,16 @@ else:
     title="Save Asset",
 )
 def ue5_save_asset(asset_path: str) -> ToolResult:
-    """Save a dirty asset to disk."""
+    """Save a dirty asset to disk.
+
+    T1.A native-first re-route (godspeed 2026-05-15): tries the C++ :8090 bridge
+    first; falls back to Python remote-exec when bridge is unreachable. See
+    `feedback_routing_matrix_correction.md`.
+    """
+    from bionics_tools.ue5_native import call_bridge_tool
+    native = call_bridge_tool("save_asset", {"asset_path": asset_path})
+    if native.ok or "Bridge unreachable" not in (native.error or ""):
+        return native
     ap = escape_path(asset_path)
     body = f"""
 if not unreal.EditorAssetLibrary.does_asset_exist('{ap}'):

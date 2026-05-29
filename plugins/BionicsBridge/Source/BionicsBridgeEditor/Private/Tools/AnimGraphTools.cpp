@@ -10,6 +10,15 @@
 #include "Tools/SetAnimNodePropertyTool.h"
 #include "Tools/CreateStateMachineTool.h"
 #include "Tools/AddStateTransitionTool.h"
+#include "Tools/SetBoneReferenceTool.h"
+#include "Tools/BindPinToPropertyTool.h"
+#include "Tools/UnbindPinFromPropertyTool.h"
+#include "Tools/SplicePoseFlowTool.h"
+#include "Tools/CreateAnimGraphVariableGetTool.h"
+#include "Tools/DriveAnimGraphPinViaVariableTool.h"
+
+#include "BoneContainer.h"
+#include "Engine/SkeletalMesh.h"
 
 #include "Animation/AnimBlueprint.h"
 #include "AnimGraphNode_Base.h"
@@ -42,6 +51,7 @@
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "K2Node_VariableGet.h"
+#include "Kismet2/KismetEditorUtilities.h"  // FKismetEditorUtilities::CompileBlueprint (drive_animgraph_pin_via_variable)
 #include "ScopedTransaction.h"
 #include "Animation/AnimSequence.h"
 #include "Animation/BlendSpace.h"
@@ -455,22 +465,39 @@ bool UWireAnimGraphPinsTool::Execute(const TSharedPtr<FJsonObject>& Args,
 		return false;
 	}
 
+	// T2 #2 verify-before-mutate gate: confirm the link actually PERSISTED in the graph.
+	// TryCreateConnection can report true while the link is dropped on reconstruction; the
+	// authoritative structural check is the bidirectional LinkedTo state. (Kills the F8 silent-lie.)
+	const bool bLinkPersisted = SourcePin->LinkedTo.Contains(TargetPin) && TargetPin->LinkedTo.Contains(SourcePin);
+
+	int32 CompileErrors = 0;
 	if (bAutoCompile)
 	{
-		int32 Errors = AnimGraphHelpers::CompileAnimBP(AnimBP);
-		OutResult = MakeShared<FJsonObject>();
-		OutResult->SetBoolField(TEXT("connected"), bConnected);
-		OutResult->SetNumberField(TEXT("compile_errors"), Errors);
+		CompileErrors = AnimGraphHelpers::CompileAnimBP(AnimBP);
 	}
 	else
 	{
 		FBlueprintEditorUtils::MarkBlueprintAsModified(AnimBP);
-		OutResult = MakeShared<FJsonObject>();
-		OutResult->SetBoolField(TEXT("connected"), bConnected);
 	}
 
+	OutResult = MakeShared<FJsonObject>();
+	OutResult->SetBoolField(TEXT("connected"), bConnected);
+	OutResult->SetBoolField(TEXT("verified_linked"), bLinkPersisted);
+	OutResult->SetNumberField(TEXT("compile_errors"), CompileErrors);
 	OutResult->SetStringField(TEXT("source"), FString::Printf(TEXT("%s.%s"), *SourceNodeName, *SourcePinName));
 	OutResult->SetStringField(TEXT("target"), FString::Printf(TEXT("%s.%s"), *TargetNodeName, *TargetPinName));
+
+	// Refuse to report success unless the link persisted AND (if we compiled) the graph is still clean.
+	if (!bLinkPersisted)
+	{
+		OutError = TEXT("verify failed: schema accepted the connection but LinkedTo did not persist — wire did not take");
+		return false;
+	}
+	if (bAutoCompile && CompileErrors > 0)
+	{
+		OutError = FString::Printf(TEXT("verify failed: wire connected but AnimBP has %d compile error(s) afterward — graph is broken"), CompileErrors);
+		return false;
+	}
 	return true;
 }
 
@@ -1115,5 +1142,612 @@ bool UAddStateTransitionTool::Execute(const TSharedPtr<FJsonObject>& Args,
 		OutResult->SetBoolField(TEXT("condition_wired"), true);
 		OutResult->SetStringField(TEXT("condition_var_node"), GetNode->GetName());
 	}
+	return true;
+}
+
+// ==============================================================
+// 9. SetBoneReferenceTool — T-BRIDGE-1 hole #1
+// ==============================================================
+
+TSharedPtr<FJsonObject> USetBoneReferenceTool::GetInputSchema() const
+{
+	return MakeSchema({
+		{TEXT("asset_path"),    TEXT("string")},
+		{TEXT("node_name"),     TEXT("string")},
+		{TEXT("bone_property"), TEXT("string")},
+		{TEXT("bone_name"),     TEXT("string")},
+	}, { TEXT("asset_path"), TEXT("node_name"), TEXT("bone_name") });
+}
+
+bool USetBoneReferenceTool::Execute(const TSharedPtr<FJsonObject>& Args,
+                                      TSharedPtr<FJsonObject>& OutResult, FString& OutError)
+{
+	const FString AssetPath = GetStringArg(Args, TEXT("asset_path"));
+	const FString NodeName = GetStringArg(Args, TEXT("node_name"));
+	const FString BoneProperty = GetStringArg(Args, TEXT("bone_property"), TEXT("BoneToModify"));
+	const FString BoneName = GetStringArg(Args, TEXT("bone_name"));
+
+	if (BoneName.IsEmpty()) { OutError = TEXT("bone_name required"); return false; }
+
+	UAnimBlueprint* AnimBP = AnimGraphHelpers::LoadAnimBP(AssetPath, OutError);
+	if (!AnimBP) return false;
+
+	USkeleton* Skeleton = AnimBP->TargetSkeleton;
+	if (!Skeleton) { OutError = TEXT("AnimBP has no TargetSkeleton — cannot resolve bone index"); return false; }
+
+	// Verify bone exists on the skeleton up front for clean error reporting
+	const int32 BoneIndex = Skeleton->GetReferenceSkeleton().FindBoneIndex(FName(*BoneName));
+	if (BoneIndex == INDEX_NONE)
+	{
+		OutError = FString::Printf(TEXT("Bone '%s' not found in skeleton '%s'"),
+			*BoneName, *Skeleton->GetName());
+		return false;
+	}
+
+	UEdGraph* AnimGraph = AnimGraphHelpers::GetRootAnimGraph(AnimBP, OutError);
+	if (!AnimGraph) return false;
+	UEdGraphNode* RawNode = AnimGraphHelpers::FindNodeByName(AnimGraph, NodeName);
+	if (!RawNode) { OutError = FString::Printf(TEXT("Node not found: %s"), *NodeName); return false; }
+	UAnimGraphNode_Base* AnimNode = Cast<UAnimGraphNode_Base>(RawNode);
+	if (!AnimNode) { OutError = TEXT("Node is not an AnimGraph node"); return false; }
+
+	// Walk to the inner FAnimNode struct, then find the FBoneReference field.
+	FStructProperty* NodeProp = CastField<FStructProperty>(
+		AnimNode->GetClass()->FindPropertyByName(TEXT("Node")));
+	if (!NodeProp) { OutError = TEXT("AnimGraphNode has no inner FAnimNode struct"); return false; }
+
+	void* NodeStruct = NodeProp->ContainerPtrToValuePtr<void>(AnimNode);
+	FStructProperty* BoneRefProp = CastField<FStructProperty>(
+		NodeProp->Struct->FindPropertyByName(FName(*BoneProperty)));
+	if (!BoneRefProp)
+	{
+		OutError = FString::Printf(TEXT("Node '%s' has no '%s' property"), *NodeName, *BoneProperty);
+		return false;
+	}
+	if (BoneRefProp->Struct->GetFName() != FName(TEXT("BoneReference")))
+	{
+		OutError = FString::Printf(TEXT("Property '%s' is not FBoneReference (got %s)"),
+			*BoneProperty, *BoneRefProp->Struct->GetName());
+		return false;
+	}
+
+	FScopedTransaction Transaction(NSLOCTEXT("BionicsBridge", "SetBoneRef", "Bionics: Set Bone Reference"));
+	AnimNode->Modify();
+
+	FBoneReference* BoneRef = BoneRefProp->ContainerPtrToValuePtr<FBoneReference>(NodeStruct);
+	BoneRef->BoneName = FName(*BoneName);
+	BoneRef->Initialize(Skeleton);
+
+	FBlueprintEditorUtils::MarkBlueprintAsModified(AnimBP);
+	AnimNode->ReconstructNode();
+
+	OutResult = MakeShared<FJsonObject>();
+	OutResult->SetBoolField(TEXT("ok"), true);
+	OutResult->SetStringField(TEXT("node_name"), NodeName);
+	OutResult->SetStringField(TEXT("bone_property"), BoneProperty);
+	OutResult->SetStringField(TEXT("bone_name"), BoneName);
+	OutResult->SetNumberField(TEXT("bone_index"), BoneIndex);
+	return true;
+}
+
+// ==============================================================
+// 10. BindPinToPropertyTool — T-BRIDGE-1 hole #2
+// ==============================================================
+
+TSharedPtr<FJsonObject> UBindPinToPropertyTool::GetInputSchema() const
+{
+	return MakeSchema({
+		{TEXT("asset_path"),      TEXT("string")},
+		{TEXT("node_name"),       TEXT("string")},
+		{TEXT("pin_name"),        TEXT("string")},
+		{TEXT("source_variable"), TEXT("string")},
+	}, { TEXT("asset_path"), TEXT("node_name"), TEXT("pin_name"), TEXT("source_variable") });
+}
+
+bool UBindPinToPropertyTool::Execute(const TSharedPtr<FJsonObject>& Args,
+                                      TSharedPtr<FJsonObject>& OutResult, FString& OutError)
+{
+	const FString AssetPath = GetStringArg(Args, TEXT("asset_path"));
+	const FString NodeName = GetStringArg(Args, TEXT("node_name"));
+	const FString PinName = GetStringArg(Args, TEXT("pin_name"));
+	const FString SourceVariable = GetStringArg(Args, TEXT("source_variable"));
+
+	if (SourceVariable.IsEmpty()) { OutError = TEXT("source_variable required"); return false; }
+
+	UAnimBlueprint* AnimBP = AnimGraphHelpers::LoadAnimBP(AssetPath, OutError);
+	if (!AnimBP) return false;
+	UEdGraph* AnimGraph = AnimGraphHelpers::GetRootAnimGraph(AnimBP, OutError);
+	if (!AnimGraph) return false;
+	UEdGraphNode* RawNode = AnimGraphHelpers::FindNodeByName(AnimGraph, NodeName);
+	if (!RawNode) { OutError = FString::Printf(TEXT("Node not found: %s"), *NodeName); return false; }
+	UAnimGraphNode_Base* AnimNode = Cast<UAnimGraphNode_Base>(RawNode);
+	if (!AnimNode) { OutError = TEXT("Node is not an AnimGraph node"); return false; }
+
+	UEdGraphPin* Pin = AnimGraphHelpers::FindPinByName(AnimNode, PinName, EGPD_Input);
+	if (!Pin)
+	{
+		OutError = FString::Printf(TEXT("Input pin '%s' not found on node '%s'"), *PinName, *NodeName);
+		return false;
+	}
+
+	// Validate the variable exists on the AnimBP class hierarchy.
+	UClass* AnimClass = AnimBP->GeneratedClass ? AnimBP->GeneratedClass.Get() : nullptr;
+	if (!AnimClass) AnimClass = AnimBP->ParentClass;
+	if (!AnimClass) { OutError = TEXT("AnimBP class not resolved"); return false; }
+	const FProperty* SourceProp = AnimClass->FindPropertyByName(FName(*SourceVariable));
+	if (!SourceProp)
+	{
+		OutError = FString::Printf(TEXT("Variable '%s' not found in %s — add it to the AnimBP first"),
+			*SourceVariable, *AnimClass->GetName());
+		return false;
+	}
+
+	// Pure reflection to access the binding's PropertyBindings map. We avoid
+	// including AnimGraphNodeBinding.h (which lives in AnimGraph/Internal/ and is
+	// not on the public include path) by going through FProperty on UAnimGraphNode_Base's
+	// private Binding field. The UE reflection system bypasses C++ access modifiers,
+	// so we can read/mutate the field even though it's `private` in C++.
+	FObjectProperty* BindingFieldProp = CastField<FObjectProperty>(
+		AnimNode->GetClass()->FindPropertyByName(TEXT("Binding")));
+	if (!BindingFieldProp)
+	{
+		OutError = TEXT("UAnimGraphNode_Base has no Binding field — engine API drift");
+		return false;
+	}
+	UObject* BindingObj = BindingFieldProp->GetObjectPropertyValue_InContainer(AnimNode);
+	if (!BindingObj)
+	{
+		OutError = TEXT("AnimGraph node binding is null — node type does not support pin bindings");
+		return false;
+	}
+
+	FMapProperty* BindingsMapProp = CastField<FMapProperty>(
+		BindingObj->GetClass()->FindPropertyByName(TEXT("PropertyBindings")));
+	if (!BindingsMapProp)
+	{
+		OutError = FString::Printf(
+			TEXT("Binding subclass %s has no PropertyBindings map — non-default binding type"),
+			*BindingObj->GetClass()->GetName());
+		return false;
+	}
+
+	FScopedTransaction Transaction(NSLOCTEXT("BionicsBridge", "BindPin", "Bionics: Bind Pin to Property"));
+	AnimNode->Modify();
+	BindingObj->Modify();
+
+	// Build the binding entry — mirrors the canonical pattern in
+	// AnimGraphNodeBinding_Base.cpp:485+ (engine source).
+	FAnimGraphNodePropertyBinding NewBinding;
+	NewBinding.PropertyName = Pin->GetFName();
+	NewBinding.PropertyPath.Add(SourceVariable);
+	NewBinding.PathAsText = FText::FromString(SourceVariable);
+	NewBinding.PinType = Pin->PinType;
+	NewBinding.Type = EAnimGraphNodePropertyBindingType::Property;
+	NewBinding.bIsBound = true;
+
+	// Insert into the private TMap via reflection. UE's TMap layout is stable
+	// regardless of where the field is declared, so the typed cast is safe given
+	// we've verified the map's key/value types via FMapProperty above.
+	TMap<FName, FAnimGraphNodePropertyBinding>* BindingsMap =
+		static_cast<TMap<FName, FAnimGraphNodePropertyBinding>*>(
+			BindingsMapProp->ContainerPtrToValuePtr<void>(BindingObj));
+	BindingsMap->Add(NewBinding.PropertyName, NewBinding);
+
+	FBlueprintEditorUtils::MarkBlueprintAsModified(AnimBP);
+	AnimNode->ReconstructNode();
+
+	// T2 #2 verify-before-mutate gate: re-read the PropertyBindings map AFTER reconstruction and
+	// confirm the binding persisted. ReconstructNode can drop a binding that Add() seemed to accept;
+	// the authoritative check is presence in the live map with bIsBound. (Kills the F8 silent-lie.)
+	// NB: use NewBinding.PropertyName (FName, copied by value) — `Pin` may be recreated by ReconstructNode.
+	bool bBindingPersisted = false;
+	if (UObject* VerifyBindingObj = BindingFieldProp->GetObjectPropertyValue_InContainer(AnimNode))
+	{
+		if (FMapProperty* VerifyMapProp = CastField<FMapProperty>(
+				VerifyBindingObj->GetClass()->FindPropertyByName(TEXT("PropertyBindings"))))
+		{
+			const TMap<FName, FAnimGraphNodePropertyBinding>* VerifyMap =
+				static_cast<const TMap<FName, FAnimGraphNodePropertyBinding>*>(
+					VerifyMapProp->ContainerPtrToValuePtr<void>(VerifyBindingObj));
+			if (const FAnimGraphNodePropertyBinding* Entry = VerifyMap->Find(NewBinding.PropertyName))
+			{
+				bBindingPersisted = Entry->bIsBound;
+			}
+		}
+	}
+
+	OutResult = MakeShared<FJsonObject>();
+	OutResult->SetBoolField(TEXT("ok"), bBindingPersisted);
+	OutResult->SetBoolField(TEXT("verified_bound"), bBindingPersisted);
+	OutResult->SetStringField(TEXT("node_name"), NodeName);
+	OutResult->SetStringField(TEXT("pin_name"), PinName);
+	OutResult->SetStringField(TEXT("source_variable"), SourceVariable);
+	OutResult->SetStringField(TEXT("source_type"), SourceProp->GetCPPType());
+	OutResult->SetStringField(TEXT("binding_class"), BindingObj->GetClass()->GetName());
+
+	// Refuse to report success unless the binding is provably present after reconstruction.
+	if (!bBindingPersisted)
+	{
+		OutError = FString::Printf(
+			TEXT("verify failed: binding for pin '%s' did not persist in PropertyBindings after ReconstructNode"), *PinName);
+		return false;
+	}
+	return true;
+}
+
+// ==============================================================
+// 9b. UnbindPinFromPropertyTool — symmetric inverse of BindPinToPropertyTool
+//
+// Impl restored 2026-05-15 godspeed campaign — header had shipped 2026-05-11
+// for B-CROUCH-WEAPON-POSE-1 cleanup but the .cpp went missing, leaving a pure
+// virtual UCLASS that broke linking on any clean rebuild. Restored using the
+// same reflection pattern as BindPinToPropertyTool above.
+// ==============================================================
+
+TSharedPtr<FJsonObject> UUnbindPinFromPropertyTool::GetInputSchema() const
+{
+	return MakeSchema({
+		{TEXT("asset_path"), TEXT("string")},
+		{TEXT("node_name"), TEXT("string")},
+		{TEXT("pin_name"),  TEXT("string")},
+	}, { TEXT("asset_path"), TEXT("node_name"), TEXT("pin_name") });
+}
+
+bool UUnbindPinFromPropertyTool::Execute(const TSharedPtr<FJsonObject>& Args,
+                                          TSharedPtr<FJsonObject>& OutResult, FString& OutError)
+{
+	const FString AssetPath = GetStringArg(Args, TEXT("asset_path"));
+	const FString NodeName = GetStringArg(Args, TEXT("node_name"));
+	const FString PinName = GetStringArg(Args, TEXT("pin_name"));
+
+	UAnimBlueprint* AnimBP = AnimGraphHelpers::LoadAnimBP(AssetPath, OutError);
+	if (!AnimBP) return false;
+	UEdGraph* AnimGraph = AnimGraphHelpers::GetRootAnimGraph(AnimBP, OutError);
+	if (!AnimGraph) return false;
+	UEdGraphNode* RawNode = AnimGraphHelpers::FindNodeByName(AnimGraph, NodeName);
+	if (!RawNode) { OutError = FString::Printf(TEXT("Node not found: %s"), *NodeName); return false; }
+	UAnimGraphNode_Base* AnimNode = Cast<UAnimGraphNode_Base>(RawNode);
+	if (!AnimNode) { OutError = TEXT("Node is not an AnimGraph node"); return false; }
+
+	UEdGraphPin* Pin = AnimGraphHelpers::FindPinByName(AnimNode, PinName, EGPD_Input);
+	if (!Pin)
+	{
+		OutError = FString::Printf(TEXT("Input pin '%s' not found on node '%s'"), *PinName, *NodeName);
+		return false;
+	}
+
+	// Reflect through the private Binding field — same path as BindPinToPropertyTool.
+	FObjectProperty* BindingFieldProp = CastField<FObjectProperty>(
+		AnimNode->GetClass()->FindPropertyByName(TEXT("Binding")));
+	if (!BindingFieldProp)
+	{
+		OutError = TEXT("UAnimGraphNode_Base has no Binding field — engine API drift");
+		return false;
+	}
+	UObject* BindingObj = BindingFieldProp->GetObjectPropertyValue_InContainer(AnimNode);
+	if (!BindingObj)
+	{
+		// No binding subsystem on this node type — nothing to unbind. Idempotent success.
+		OutResult = MakeShared<FJsonObject>();
+		OutResult->SetBoolField(TEXT("ok"), true);
+		OutResult->SetBoolField(TEXT("had_binding"), false);
+		OutResult->SetStringField(TEXT("note"), TEXT("Node has no binding subsystem — no-op"));
+		return true;
+	}
+
+	FMapProperty* BindingsMapProp = CastField<FMapProperty>(
+		BindingObj->GetClass()->FindPropertyByName(TEXT("PropertyBindings")));
+	if (!BindingsMapProp)
+	{
+		OutError = FString::Printf(
+			TEXT("Binding subclass %s has no PropertyBindings map — non-default binding type"),
+			*BindingObj->GetClass()->GetName());
+		return false;
+	}
+
+	TMap<FName, FAnimGraphNodePropertyBinding>* BindingsMap =
+		static_cast<TMap<FName, FAnimGraphNodePropertyBinding>*>(
+			BindingsMapProp->ContainerPtrToValuePtr<void>(BindingObj));
+
+	const FName PinFName = Pin->GetFName();
+	const bool bHadBinding = BindingsMap->Contains(PinFName);
+
+	if (bHadBinding)
+	{
+		FScopedTransaction Transaction(NSLOCTEXT("BionicsBridge", "UnbindPin", "Bionics: Unbind Pin from Property"));
+		AnimNode->Modify();
+		BindingObj->Modify();
+		BindingsMap->Remove(PinFName);
+		FBlueprintEditorUtils::MarkBlueprintAsModified(AnimBP);
+		AnimNode->ReconstructNode();
+	}
+
+	OutResult = MakeShared<FJsonObject>();
+	OutResult->SetBoolField(TEXT("ok"), true);
+	OutResult->SetBoolField(TEXT("had_binding"), bHadBinding);
+	OutResult->SetStringField(TEXT("node_name"), NodeName);
+	OutResult->SetStringField(TEXT("pin_name"), PinName);
+	if (!bHadBinding)
+	{
+		OutResult->SetStringField(TEXT("note"), TEXT("No binding existed on this pin — no-op (idempotent)"));
+	}
+	return true;
+}
+
+// ==============================================================
+// 11. SplicePoseFlowTool — T-BRIDGE-1 hole #3
+// ==============================================================
+
+TSharedPtr<FJsonObject> USplicePoseFlowTool::GetInputSchema() const
+{
+	return MakeSchema({
+		{TEXT("asset_path"),         TEXT("string")},
+		{TEXT("source_node"),        TEXT("string")},
+		{TEXT("source_pin"),         TEXT("string")},
+		{TEXT("sink_node"),          TEXT("string")},
+		{TEXT("sink_pin"),           TEXT("string")},
+		{TEXT("splice_node"),        TEXT("string")},
+		{TEXT("splice_input_pin"),   TEXT("string")},
+		{TEXT("splice_output_pin"),  TEXT("string")},
+	}, {
+		TEXT("asset_path"),
+		TEXT("source_node"), TEXT("source_pin"),
+		TEXT("sink_node"), TEXT("sink_pin"),
+		TEXT("splice_node"), TEXT("splice_input_pin"), TEXT("splice_output_pin"),
+	});
+}
+
+bool USplicePoseFlowTool::Execute(const TSharedPtr<FJsonObject>& Args,
+                                    TSharedPtr<FJsonObject>& OutResult, FString& OutError)
+{
+	const FString AssetPath        = GetStringArg(Args, TEXT("asset_path"));
+	const FString SourceNodeName   = GetStringArg(Args, TEXT("source_node"));
+	const FString SourcePinName    = GetStringArg(Args, TEXT("source_pin"));
+	const FString SinkNodeName     = GetStringArg(Args, TEXT("sink_node"));
+	const FString SinkPinName      = GetStringArg(Args, TEXT("sink_pin"));
+	const FString SpliceNodeName   = GetStringArg(Args, TEXT("splice_node"));
+	const FString SpliceInputPin   = GetStringArg(Args, TEXT("splice_input_pin"));
+	const FString SpliceOutputPin  = GetStringArg(Args, TEXT("splice_output_pin"));
+
+	UAnimBlueprint* AnimBP = AnimGraphHelpers::LoadAnimBP(AssetPath, OutError);
+	if (!AnimBP) return false;
+	UEdGraph* AnimGraph = AnimGraphHelpers::GetRootAnimGraph(AnimBP, OutError);
+	if (!AnimGraph) return false;
+
+	UEdGraphNode* SrcN  = AnimGraphHelpers::FindNodeByName(AnimGraph, SourceNodeName);
+	UEdGraphNode* SinkN = AnimGraphHelpers::FindNodeByName(AnimGraph, SinkNodeName);
+	UEdGraphNode* SplN  = AnimGraphHelpers::FindNodeByName(AnimGraph, SpliceNodeName);
+	if (!SrcN)  { OutError = FString::Printf(TEXT("Source node not found: %s"),  *SourceNodeName);  return false; }
+	if (!SinkN) { OutError = FString::Printf(TEXT("Sink node not found: %s"),    *SinkNodeName);    return false; }
+	if (!SplN)  { OutError = FString::Printf(TEXT("Splice node not found: %s"),  *SpliceNodeName);  return false; }
+
+	UEdGraphPin* SrcPin    = AnimGraphHelpers::FindPinByName(SrcN,  SourcePinName,   EGPD_Output);
+	UEdGraphPin* SinkPin   = AnimGraphHelpers::FindPinByName(SinkN, SinkPinName,     EGPD_Input);
+	UEdGraphPin* SplInPin  = AnimGraphHelpers::FindPinByName(SplN,  SpliceInputPin,  EGPD_Input);
+	UEdGraphPin* SplOutPin = AnimGraphHelpers::FindPinByName(SplN,  SpliceOutputPin, EGPD_Output);
+	if (!SrcPin)    { OutError = FString::Printf(TEXT("Source output pin not found: %s.%s"),  *SourceNodeName, *SourcePinName);   return false; }
+	if (!SinkPin)   { OutError = FString::Printf(TEXT("Sink input pin not found: %s.%s"),     *SinkNodeName,   *SinkPinName);     return false; }
+	if (!SplInPin)  { OutError = FString::Printf(TEXT("Splice input pin not found: %s.%s"),   *SpliceNodeName, *SpliceInputPin);  return false; }
+	if (!SplOutPin) { OutError = FString::Printf(TEXT("Splice output pin not found: %s.%s"),  *SpliceNodeName, *SpliceOutputPin); return false; }
+
+	FScopedTransaction Transaction(NSLOCTEXT("BionicsBridge", "SplicePose", "Bionics: Splice Pose Flow"));
+
+	// Detect existing direct wire between source and sink — if present, break it
+	// so we don't end up with a triangulated graph after the splice.
+	const bool bBrokeExistingWire = SrcPin->LinkedTo.Contains(SinkPin);
+	if (bBrokeExistingWire)
+	{
+		SrcPin->BreakLinkTo(SinkPin);
+	}
+
+	SrcPin->MakeLinkTo(SplInPin);
+	SplOutPin->MakeLinkTo(SinkPin);
+
+	FBlueprintEditorUtils::MarkBlueprintAsModified(AnimBP);
+	AnimGraph->NotifyGraphChanged();
+
+	OutResult = MakeShared<FJsonObject>();
+	OutResult->SetBoolField(TEXT("ok"), true);
+	OutResult->SetBoolField(TEXT("broke_existing_wire"), bBrokeExistingWire);
+	OutResult->SetStringField(TEXT("source"), FString::Printf(TEXT("%s.%s"), *SourceNodeName, *SourcePinName));
+	OutResult->SetStringField(TEXT("sink"),   FString::Printf(TEXT("%s.%s"), *SinkNodeName,   *SinkPinName));
+	OutResult->SetStringField(TEXT("splice"), FString::Printf(TEXT("%s.[%s→%s]"),
+		*SpliceNodeName, *SpliceInputPin, *SpliceOutputPin));
+	return true;
+}
+
+// ==============================================================
+// 12. CreateAnimGraphVariableGetTool — LIMIT 2 fix (godspeed 2026-05-15)
+//
+// Spawns a K2Node_VariableGet inside the AnimGraph using the canonical pattern
+// (proven in EventGraphTools.cpp:454 + AnimGraphTools.cpp:1088). Python cannot
+// do this directly — FMemberReference fields are protected UPROPERTY with no
+// UFUNCTION mutators (MemberReference.h:63-95).
+// ==============================================================
+
+TSharedPtr<FJsonObject> UCreateAnimGraphVariableGetTool::GetInputSchema() const
+{
+	return MakeSchema({
+		{TEXT("asset_path"), TEXT("string")},
+		{TEXT("variable_name"), TEXT("string")},
+		{TEXT("pos_x"), TEXT("integer")},
+		{TEXT("pos_y"), TEXT("integer")},
+	}, { TEXT("asset_path"), TEXT("variable_name") });
+}
+
+bool UCreateAnimGraphVariableGetTool::Execute(const TSharedPtr<FJsonObject>& Args,
+                                               TSharedPtr<FJsonObject>& OutResult, FString& OutError)
+{
+	const FString AssetPath = GetStringArg(Args, TEXT("asset_path"));
+	const FString VariableName = GetStringArg(Args, TEXT("variable_name"));
+	const int32 PosX = GetIntArg(Args, TEXT("pos_x"), 0);
+	const int32 PosY = GetIntArg(Args, TEXT("pos_y"), 0);
+
+	UAnimBlueprint* AnimBP = AnimGraphHelpers::LoadAnimBP(AssetPath, OutError);
+	if (!AnimBP) return false;
+
+	UEdGraph* AnimGraph = AnimGraphHelpers::GetRootAnimGraph(AnimBP, OutError);
+	if (!AnimGraph) return false;
+
+	// Validate the variable exists on the AnimBP class hierarchy.
+	const FName VarFName(*VariableName);
+	UClass* AnimClass = AnimBP->SkeletonGeneratedClass
+		? AnimBP->SkeletonGeneratedClass.Get()
+		: (AnimBP->GeneratedClass ? AnimBP->GeneratedClass.Get() : AnimBP->ParentClass.Get());
+	FProperty* VarProp = AnimClass ? AnimClass->FindPropertyByName(VarFName) : nullptr;
+	if (!VarProp)
+	{
+		OutError = FString::Printf(TEXT("Variable '%s' not found on AnimBP class %s"),
+			*VariableName, AnimClass ? *AnimClass->GetName() : TEXT("<null>"));
+		return false;
+	}
+
+	FScopedTransaction Transaction(NSLOCTEXT("BionicsBridge", "CreateAnimGraphVarGet",
+		"Bionics: Create AnimGraph VariableGet"));
+	AnimGraph->Modify();
+
+	UK2Node_VariableGet* GetNode = NewObject<UK2Node_VariableGet>(
+		AnimGraph, UK2Node_VariableGet::StaticClass(), NAME_None, RF_Transactional);
+	GetNode->VariableReference.SetSelfMember(VarFName);
+	GetNode->CreateNewGuid();
+	GetNode->NodePosX = PosX;
+	GetNode->NodePosY = PosY;
+
+	AnimGraph->AddNode(GetNode, /*bFromUI=*/false, /*bSelectNewNode=*/false);
+	GetNode->PostPlacedNewNode();
+	GetNode->AllocateDefaultPins();
+
+	FBlueprintEditorUtils::MarkBlueprintAsModified(AnimBP);
+	AnimGraph->NotifyGraphChanged();
+
+	// Locate the output pin (named after the variable) for downstream wiring callers.
+	UEdGraphPin* OutPin = GetNode->FindPin(VarFName);
+
+	OutResult = AnimGraphHelpers::NodeToJson(GetNode);
+	OutResult->SetBoolField(TEXT("created"), true);
+	OutResult->SetStringField(TEXT("variable_name"), VariableName);
+	OutResult->SetStringField(TEXT("node_name"), GetNode->GetName());
+	OutResult->SetStringField(TEXT("node_guid"), GetNode->NodeGuid.ToString());
+	OutResult->SetStringField(TEXT("output_pin_name"), OutPin ? OutPin->GetName() : TEXT(""));
+	return true;
+}
+
+// ==============================================================
+// 13. DriveAnimGraphPinViaVariableTool — LIMIT 1 fix (godspeed 2026-05-15)
+//
+// Atomic spawn-wire-compile replacement for BindPinToPropertyTool. The binding
+// path is metadata-only — runtime FExposedValueHandler subsystem (read at
+// AnimNodeBase.cpp:262-275) is patched ONLY during CompileBlueprint via
+// AnimBlueprintExtension_Base::ProcessNonPosePins. Explicit graph wires ARE
+// what the compile registers, so wire + compile is runtime-correct where
+// bind_pin_to_property is structurally broken.
+// ==============================================================
+
+TSharedPtr<FJsonObject> UDriveAnimGraphPinViaVariableTool::GetInputSchema() const
+{
+	return MakeSchema({
+		{TEXT("asset_path"), TEXT("string")},
+		{TEXT("variable_name"), TEXT("string")},
+		{TEXT("target_node_name"), TEXT("string")},  // GetName() of the anim node to drive
+		{TEXT("target_pin_name"), TEXT("string")},   // name of the input pin (e.g. "bActiveValue")
+		{TEXT("pos_x"), TEXT("integer")},
+		{TEXT("pos_y"), TEXT("integer")},
+		{TEXT("compile"), TEXT("boolean")},          // default true — set false to defer compile
+	}, { TEXT("asset_path"), TEXT("variable_name"), TEXT("target_node_name"), TEXT("target_pin_name") });
+}
+
+bool UDriveAnimGraphPinViaVariableTool::Execute(const TSharedPtr<FJsonObject>& Args,
+                                                 TSharedPtr<FJsonObject>& OutResult, FString& OutError)
+{
+	const FString AssetPath = GetStringArg(Args, TEXT("asset_path"));
+	const FString VariableName = GetStringArg(Args, TEXT("variable_name"));
+	const FString TargetNodeName = GetStringArg(Args, TEXT("target_node_name"));
+	const FString TargetPinName = GetStringArg(Args, TEXT("target_pin_name"));
+	const int32 PosX = GetIntArg(Args, TEXT("pos_x"), 0);
+	const int32 PosY = GetIntArg(Args, TEXT("pos_y"), 0);
+	const bool bCompile = GetBoolArg(Args, TEXT("compile"), true);
+
+	UAnimBlueprint* AnimBP = AnimGraphHelpers::LoadAnimBP(AssetPath, OutError);
+	if (!AnimBP) return false;
+
+	UEdGraph* AnimGraph = AnimGraphHelpers::GetRootAnimGraph(AnimBP, OutError);
+	if (!AnimGraph) return false;
+
+	// Validate variable on the AnimBP class.
+	const FName VarFName(*VariableName);
+	UClass* AnimClass = AnimBP->SkeletonGeneratedClass
+		? AnimBP->SkeletonGeneratedClass.Get()
+		: (AnimBP->GeneratedClass ? AnimBP->GeneratedClass.Get() : AnimBP->ParentClass.Get());
+	FProperty* VarProp = AnimClass ? AnimClass->FindPropertyByName(VarFName) : nullptr;
+	if (!VarProp)
+	{
+		OutError = FString::Printf(TEXT("Variable '%s' not found on AnimBP class %s"),
+			*VariableName, AnimClass ? *AnimClass->GetName() : TEXT("<null>"));
+		return false;
+	}
+
+	// Locate target anim node + input pin BEFORE creating the variable-get node,
+	// so we fail fast without leaving an orphan node on the graph.
+	UEdGraphNode* TargetNode = AnimGraphHelpers::FindNodeByName(AnimGraph, TargetNodeName);
+	if (!TargetNode)
+	{
+		OutError = FString::Printf(TEXT("Target node '%s' not found in AnimGraph"), *TargetNodeName);
+		return false;
+	}
+	UEdGraphPin* TargetPin = AnimGraphHelpers::FindPinByName(TargetNode, TargetPinName, EGPD_Input);
+	if (!TargetPin)
+	{
+		OutError = FString::Printf(TEXT("Input pin '%s.%s' not found"),
+			*TargetNodeName, *TargetPinName);
+		return false;
+	}
+
+	FScopedTransaction Transaction(NSLOCTEXT("BionicsBridge", "DriveAnimGraphPin",
+		"Bionics: Drive AnimGraph Pin via Variable"));
+	AnimGraph->Modify();
+
+	// Spawn the variable-get node (canonical 7-line pattern).
+	UK2Node_VariableGet* GetNode = NewObject<UK2Node_VariableGet>(
+		AnimGraph, UK2Node_VariableGet::StaticClass(), NAME_None, RF_Transactional);
+	GetNode->VariableReference.SetSelfMember(VarFName);
+	GetNode->CreateNewGuid();
+	GetNode->NodePosX = PosX;
+	GetNode->NodePosY = PosY;
+	AnimGraph->AddNode(GetNode, /*bFromUI=*/false, /*bSelectNewNode=*/false);
+	GetNode->PostPlacedNewNode();
+	GetNode->AllocateDefaultPins();
+
+	// Wire output → target input.
+	UEdGraphPin* OutPin = GetNode->FindPin(VarFName);
+	if (!OutPin)
+	{
+		OutError = FString::Printf(TEXT("Variable-get output pin '%s' not allocated"), *VariableName);
+		return false;
+	}
+	OutPin->MakeLinkTo(TargetPin);
+
+	FBlueprintEditorUtils::MarkBlueprintAsModified(AnimBP);
+	AnimGraph->NotifyGraphChanged();
+
+	bool bCompileOK = false;
+	if (bCompile)
+	{
+		// CompileBlueprint patches PatchEvaluationHandlers → FExposedValueHandler subsystem.
+		// This is the load-bearing step that makes the wire drive runtime evaluation.
+		FKismetEditorUtilities::CompileBlueprint(AnimBP);
+		bCompileOK = (AnimBP->Status == BS_UpToDate);
+	}
+
+	OutResult = MakeShared<FJsonObject>();
+	OutResult->SetBoolField(TEXT("ok"), true);
+	OutResult->SetStringField(TEXT("variable_name"), VariableName);
+	OutResult->SetStringField(TEXT("get_node_name"), GetNode->GetName());
+	OutResult->SetStringField(TEXT("output_pin"), OutPin->GetName());
+	OutResult->SetStringField(TEXT("target_node"), TargetNodeName);
+	OutResult->SetStringField(TEXT("target_pin"), TargetPinName);
+	OutResult->SetBoolField(TEXT("compile_requested"), bCompile);
+	OutResult->SetBoolField(TEXT("compile_ok"), bCompileOK);
+	OutResult->SetNumberField(TEXT("compile_status"),
+		static_cast<int32>(AnimBP->Status));
 	return true;
 }

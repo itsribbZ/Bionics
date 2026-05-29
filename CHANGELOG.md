@@ -139,7 +139,7 @@ PATCH bundle resolving 7 P0 findings from the v0.7.2 multi-agent + live-fire aud
   Both swapped to `claude-sonnet-4-6`. Same audit lesson as v0.7.2: model-ID drift requires a periodic full-repo grep, not just the touched files of the day.
 
 ### Fixed (doc-drift sweep — 8 surfaces)
-Live MCP registry: **187 tools** across 33 categories (`get_registry().count()` after `register_all()`). Stale claims swept:
+Live MCP registry: **192 tools** across 33 categories (`get_registry().count()` after `register_all()`). Stale claims swept:
 - `pyproject.toml:8` — `"179 tools"` → `"187 tools"` in description; also dropped the misleading "15 dead-code paths cleaned" tail (a one-time v0.5.9 receipt that shouldn't live forever in the package description)
 - `README.md:3` — headline `"179 tools"` → `"187 tools"`
 - `README.md:16` — `"179 tools across 30 categories"` → `"187 tools across 33 categories"` + added EventGraph (K2), Linked Anim Layers, divine_powers to the "what it does" enumeration
