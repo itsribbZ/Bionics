@@ -156,7 +156,7 @@ def install_otel_hooks(service_name: str | None = None) -> bool:
             return False
 
         trace.set_tracer_provider(provider)
-        tracer = trace.get_tracer("bionics.tool", "0.8.3")
+        tracer = trace.get_tracer("bionics.tool", "0.8.4")
 
         def _pre(tool_name: str, arguments: dict, context: dict) -> None:
             span = tracer.start_span(f"bionics.tool/{tool_name}")

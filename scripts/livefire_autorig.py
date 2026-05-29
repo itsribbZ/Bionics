@@ -5,7 +5,7 @@ config.yaml's paths.ue5_project (the _discover_bridge config fallback), so no
 BIONICS_BRIDGE_* env workaround is needed. Run AFTER scripts/livefire_uasvc.py has landed
 a SkeletalMesh (or point --mesh at any existing one).
 
-Positive case : a humanoid SkeletalMesh -> expect ok=True, humanoid=True, 9/9 chains.
+Positive case : a humanoid SkeletalMesh -> expect ok=True, humanoid=True, 7/7 chains (Sworder canon).
 Negative case : a non-humanoid mesh (e.g. the Formahger sword) -> with --negative the
                 harness PASSES on a clean fail-closed verdict (ok=False, humanoid=False)
                 and only FAILS on a tool-level crash/timeout.
@@ -39,7 +39,7 @@ def _invoke_and_print(fn, args, label: str):
     print(f"  bone_count       = {d.get('bone_count')} (method={d.get('bone_method')})")
     print(f"  mannequin_missing= {d.get('mannequin_missing')}")
     print(f"  ikrig_path       = {d.get('ikrig_path')}")
-    print(f"  chains           = {d.get('configured_count')}/9 "
+    print(f"  chains           = {d.get('configured_count')}/{d.get('expected_count')} "
           f"(verified {d.get('verified_count')}, unique {d.get('unique_verified_count')}, "
           f"cleared {d.get('cleared_count')})")
     print(f"  stage            = {d.get('stage')}")
@@ -57,29 +57,31 @@ def main() -> int:
     ap.add_argument("--negative", action="store_true",
                     help="Treat a clean fail-closed (non-humanoid) verdict as PASS")
     ap.add_argument("--idempotency", action="store_true",
-                    help="Run TWICE and assert the rebuild stays exactly 9 chains (dup-pollution regression)")
+                    help="Run TWICE and assert the rebuild stays at the canonical chain count (dup-pollution regression)")
     args = ap.parse_args()
 
     from bionics_tools.ue5_autorig import ue5_autorig_humanoid
 
-    # ── Idempotency mode: the 27-chain dup-pollution regression gate (Rule #13 front-to-back).
-    # Run 1 builds the rig; Run 2 must clear the prior 9 and rebuild to exactly 9 (never 18/27).
+    # ── Idempotency mode: the dup-pollution regression gate (Rule #13 front-to-back). Run 1 builds
+    # the rig; Run 2 must clear the prior chains and rebuild to exactly the canon (never a stack).
+    # The expected count comes from the tool (len(CHAINS) = 7 for Sworder) — not hardcoded here.
     if args.idempotency:
         r1, d1 = _invoke_and_print(ue5_autorig_humanoid, args, "run 1 (build)")
-        if not r1.ok or d1.get("verified_count") != 9:
-            print("\nFAIL: run 1 did not produce a clean 9-chain rig — cannot test idempotency.")
+        exp = d1.get("expected_count")
+        if not r1.ok or not exp or d1.get("verified_count") != exp:
+            print(f"\nFAIL: run 1 did not produce a clean {exp or '?'}-chain rig — cannot test idempotency.")
             return 1
         r2, d2 = _invoke_and_print(ue5_autorig_humanoid, args, "run 2 (rebuild)")
         ok = (
             r2.ok
-            and d2.get("verified_count") == 9
-            and d2.get("unique_verified_count") == 9
-            and d2.get("cleared_count") == 9  # run 2 must have removed run 1's 9 chains first
+            and d2.get("verified_count") == exp
+            and d2.get("unique_verified_count") == exp
+            and d2.get("cleared_count") == exp  # run 2 must have removed run 1's chains first
         )
         if ok:
-            print("\nPASS: re-run cleared 9 + rebuilt to exactly 9 — no dup pollution (9, not 18/27).")
+            print(f"\nPASS: re-run cleared {exp} + rebuilt to exactly {exp} — no dup pollution.")
             return 0
-        print(f"\nFAIL: re-run did not stay at 9 — verified={d2.get('verified_count')} "
+        print(f"\nFAIL: re-run did not stay at {exp} — verified={d2.get('verified_count')} "
               f"cleared={d2.get('cleared_count')} (the dup-pollution bug). ")
         return 1
 
@@ -94,10 +96,11 @@ def main() -> int:
         print(f"\nPASS: negative case evaluated cleanly (ok={result.ok}, humanoid={d.get('humanoid')}).")
         return 0
 
-    if result.ok and d.get("humanoid") and d.get("configured_count") == 9:
-        print("\nPASS: humanoid validated + 9/9 IKRig chains landed.")
+    exp = d.get("expected_count")
+    if result.ok and d.get("humanoid") and exp and d.get("configured_count") == exp:
+        print(f"\nPASS: humanoid validated + {exp}/{exp} IKRig chains landed.")
         return 0
-    print("\nFAIL: positive case did not produce a 9-chain humanoid rig.")
+    print(f"\nFAIL: positive case did not produce a clean humanoid rig ({d.get('configured_count')}/{exp}).")
     return 1
 
 

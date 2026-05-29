@@ -2,6 +2,21 @@
 
 All notable changes to Bionics will be listed here. Semver: MAJOR.MINOR.PATCH.
 
+## [0.8.4] — 2026-05-29 (autorig chain canon → 7, aligned to the game's IKRig_Mannequin/IKRig_SciFiTrooper)
+
+PATCH bump: M5 Stage 1. Live-verified against UE5 5.7 + BionicsBridge `:8090`.
+
+### Fixed — autorig builds the 7-chain Sworder canon (was 9), so retarget auto_map will hit 7/7
+- `bionics_tools/ue5_autorig.py`: live introspection of the project's real rigs (`IKRig_Mannequin` source + `IKRig_SciFiTrooper` target) showed BOTH use the SAME 7-chain set — Root, Spine, Head, LeftArm, RightArm, LeftLeg, RightLeg — with **no Pelvis or Neck chain**. The autorig hardcoded 9; the extra Pelvis+Neck map to nothing on the source and pin those bones to ref-pose, fighting the retarget. Dropped Pelvis+Neck → 7-chain canon matching the game rigs exactly (names align, so `auto_map EXACT` hits 7/7). The gate count is now driven by `len(CHAINS)` (single source of truth), surfaced as `expected_count`; the UE5-side gate + host backstop + live-fire all track it instead of a hardcoded 9. The v0.8.3 idempotency mechanism (clear → re-query-assert-empty → exactly-N-unique + host backstop) is unchanged.
+- **Receipt**: `scripts/livefire_autorig.py --idempotency` over `:8090` — run 1 self-healed the live `IKR_SW_HumanoidTemplate` from 9 chains down to exactly 7; run 2 held at 7/7 unique (cleared 7). The live target rig now matches the source's 7 chains.
+
+### Stage 0 (live verification, banked for the Stage 2 retarget tool)
+- `IKRetargetBatchOperation.duplicate_and_retarget(assets, source_mesh, target_mesh, ik_retarget_asset, search, replace, prefix, suffix, include_referenced_assets, overwrite_existing_files)` signature confirmed live (the existing `ue5_batch_retarget` is dead — fabricated `IKRetargetBatchOperationNameRule`). UE5.7 `IKRetargeterController` is an ops-stack API (`add_default_ops` / `assign_ik_rig_to_all_ops` / `set_ik_rig` / `auto_map_chains` / `get/set_root_settings`). Enums `RetargetSourceOrTarget{SOURCE,TARGET}`, `AutoMapChainType{CLEAR,EXACT,FUZZY}`. Proven `RTG_Mannequin_to_SciFiTrooper` exists; `IKR_`/`IK_` name collision confirmed. (`query_assets`' short-name class filter silently fails for IKRig plugin classes — use AssetRegistry `get_assets_by_class` with `TopLevelAssetPath`.)
+
+### Tests (535 GREEN, count steady)
+- `tests/test_ue5_autorig.py`: 9→7 canon across the host tests; the dup-at-N case now targets `verified=7/unique=6`; the over-count case = 14 (a 2× stack of the 7-canon).
+- `scripts/livefire_autorig.py --idempotency`: now count-agnostic (asserts against the tool's reported `expected_count`).
+
 ## [0.8.3] — 2026-05-29 (autorig idempotency — the 27/36-chain dup-pollution retarget blocker eliminated)
 
 PATCH bump: makes `ue5_autorig_humanoid` idempotent. Live-verified against UE5 5.7 + BionicsBridge `:8090` (self-healed a 36-chain polluted rig → 9; a re-run holds at exactly 9).

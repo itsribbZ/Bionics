@@ -173,7 +173,7 @@ DIVINE_KNOWLEDGE_MAP = {
 PREFERRED_NATIVE_TOOLS = """PREFERRED NATIVE BIONICS TOOLS (emit execution_method="bionics_tool" with bionics_tool=<name> + bionics_args; do NOT hand-write equivalent scripts):
   - ue5_uasvc_import_skeletal(file_path, asset_name, dest_path="/Game/Test/Skel"): import a .glb/.gltf/.fbx into a SkeletalMesh+Skeleton+PhysicsAsset. Fail-closed — errors if the source lands as a StaticMesh (skin not detected). Use for ANY skeletal mesh import.
   - ue5_uasvc_preflight(): static check that the project's Interchange FBX flag allows skeletal FBX import. Run before importing an .fbx.
-  - ue5_autorig_humanoid(skeletal_mesh_path, ikrig_name="", ikrig_dest="/Game/Test/Skel"): validate a mesh as humanoid (23 Mannequin core bones) then build a 9-chain IKRig. Fail-closed — refuses a non-humanoid mesh. Use for humanoid rigging.
+  - ue5_autorig_humanoid(skeletal_mesh_path, ikrig_name="", ikrig_dest="/Game/Test/Skel"): validate a mesh as humanoid (23 Mannequin core bones) then build a 7-chain IKRig (the canon matching the game's IKRig_Mannequin/IKRig_SciFiTrooper, so retarget auto_map hits 7/7). Idempotent + fail-closed — refuses a non-humanoid mesh. Use for humanoid rigging.
   - ue5_drive_animgraph_pin_via_variable(asset_path, variable_name, target_node_name, target_pin_name): runtime-correct AnimGraph pin driving (spawn+wire+compile). PREFER over bind_pin_to_property."""
 
 

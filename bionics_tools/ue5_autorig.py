@@ -1,22 +1,23 @@
-"""UE5 Autorig — native-first fail-closed bone-validate + 9-chain IKRig over :8090.
+"""UE5 Autorig — native-first fail-closed bone-validate + 7-chain IKRig over :8090.
 
 Roadmap M4 (bone validation) + M5 (autorig). Ported VERBATIM from the live-proven seed
 ``blend-master/bridge/_ue5_validate_and_rig.py`` (2026-05-28: SK_SW_HumanoidTemplate ->
-23/23 Mannequin bones -> 9/9 IKRig chains; the 7-bone Formahger sword correctly REFUSED
+23/23 Mannequin bones validated -> IKRig built; the 7-bone Formahger sword correctly REFUSED
 a rig). See feedback_ue5_skeletal_pipeline_proven_2026_05_28.
 
 Fail-closed BOTH ways (kills the upstream WARN-and-continue false-pass):
   - bone extraction returns nothing            -> FAIL (cannot validate, do not rig)
   - missing any Mannequin core bone (humanoid) -> ABORT, never build a broken rig
-  - IKRig chains re-queried after add          -> ok only if EXACTLY 9 unique resolve
+  - IKRig chains re-queried after add          -> ok only if EXACTLY len(CHAINS) unique resolve
 
 Idempotent (the retarget blocker fix): add_retarget_chain APPENDS, so re-running the old
 build stacked 9 -> 18 -> 27 duplicate chains and the loose `verified >= 9` gate rubber-stamped
 it, breaking the downstream IK Retargeter. The build now clears all existing retarget chains
 and RE-QUERIES to assert the rig is actually empty before rebuilding — aborting fail-closed if
 any chain survived the clear, so an already-polluted rig self-heals for real, not best-effort.
-The UE5-side gate requires exactly 9 unique; and a host-side backstop independently rejects any
-count not in {0,9}, any non-{0,9} unique count, a count/unique mismatch, or an incomplete clear.
+The UE5-side gate requires exactly len(CHAINS) unique (7, the Sworder canon matching the game's
+IKRig_Mannequin/IKRig_SciFiTrooper); a host-side backstop independently rejects any count not in
+{0,N}, a non-{0,N} unique count, a count/unique mismatch, or an incomplete clear.
 
 Transport mirrors ue5_uasvc (deferred ``py exec`` over :8090 + delete-then-poll a result
 file); the fire-and-poll + scratch-dir helpers now live in the shared
@@ -36,6 +37,11 @@ from bionics_tools.ue5_native import call_bridge_tool
 from core.bridge import SafetyTier, ToolResult, bionics_tool
 
 _RIG_MARKER = "BIONICS_RIG_RESULT"
+
+# Sworder's rigs (IKRig_Mannequin / IKRig_SciFiTrooper) use a 7-chain set — live-verified
+# 2026-05-29. Host-side fallback for the dup-pollution backstop when the UE5 script didn't
+# report expected_count; the authoritative source of truth is len(CHAINS) in the embedded script.
+_CANONICAL_CHAIN_COUNT = 7
 
 # UE5-side validate-then-rig script — proven VERBATIM from the 2026-05-28 seed, with the
 # two scratch paths parametrized via sentinels and params widened to take an explicit
@@ -62,9 +68,14 @@ MANNEQUIN_CORE = [
     "thigh_r", "calf_r", "foot_r", "ball_r",
 ]
 
+# 7-chain canon — matches the game's IKRig_Mannequin + IKRig_SciFiTrooper EXACTLY (both
+# live-verified 2026-05-29: Root, Spine, Head, LeftArm, RightArm, LeftLeg, RightLeg). Do NOT add
+# Pelvis or Neck: the retarget SOURCE IKRig_Mannequin has no such chains, so auto_map would leave
+# them unmapped and pin those bones to ref-pose, fighting the retarget. Chain NAMES must match the
+# source rig for auto_map EXACT to hit all 7. This is the single source of truth for the gate count.
 CHAINS = [
-    ("Root", "root", "root"), ("Pelvis", "pelvis", "pelvis"),
-    ("Spine", "spine_01", "spine_03"), ("Neck", "neck_01", "neck_01"),
+    ("Root", "root", "root"),
+    ("Spine", "spine_01", "spine_03"),
     ("Head", "head", "head"),
     ("LeftArm", "clavicle_l", "hand_l"), ("RightArm", "clavicle_r", "hand_r"),
     ("LeftLeg", "thigh_l", "ball_l"), ("RightLeg", "thigh_r", "ball_r"),
@@ -212,6 +223,7 @@ def run():
             "configured_count": 0,
             "verified_count": 0,
             "unique_verified_count": 0,
+            "expected_count": len(CHAINS),
         }
         return
 
@@ -247,6 +259,7 @@ def run():
         RES["errors"].append("save_asset: " + str(e))
 
     unique_verified = set(verified)
+    expected = len(CHAINS)
     RES["ikrig"] = {
         "path": ikrig.get_path_name(),
         "configured": configured,
@@ -254,17 +267,21 @@ def run():
         "verified_chains": verified,
         "verified_count": len(verified),
         "unique_verified_count": len(unique_verified),
+        "expected_count": expected,
         "cleared_pre_existing": cleared,
         "cleared_count": len(cleared),
         "cleared_incomplete": False,
     }
-    # ok requires the canonical 9 added AND — when the re-query works — EXACTLY 9 UNIQUE chains
-    # present (no dup pollution). The `not verified` fallback trusts the 9 adds ONLY if
-    # get_retarget_chains() itself failed/returned nothing (API quirk) — never to excuse dups.
+    # ok requires the canonical chain set added AND — when the re-query works — EXACTLY that many
+    # UNIQUE chains present (no dup pollution). expected = len(CHAINS) is the single source of truth
+    # (7 for Sworder). The `not verified` fallback trusts the adds ONLY if get_retarget_chains()
+    # itself failed/returned nothing (API quirk) — never to excuse dups.
     if verified:
-        chains_ok = len(configured) == 9 and len(verified) == 9 and len(unique_verified) == 9
+        chains_ok = (
+            len(configured) == expected and len(verified) == expected and len(unique_verified) == expected
+        )
     else:
-        chains_ok = len(configured) == 9
+        chains_ok = len(configured) == expected
     RES["ok"] = chains_ok
     RES["stage"] = "done"
 
@@ -280,7 +297,7 @@ with open(RESULT_PATH, "w") as f:
 
 unreal.log(
     f"BIONICS_RIG_RESULT: ok={RES['ok']} humanoid={RES['bones'].get('humanoid')} "
-    f"bones={RES['bones'].get('count')} chains={RES['ikrig'].get('configured_count')}/9 "
+    f"bones={RES['bones'].get('count')} chains={RES['ikrig'].get('configured_count')}/{RES['ikrig'].get('expected_count')} "
     f"verified={RES['ikrig'].get('verified_count')}"
 )
 '''
@@ -331,7 +348,7 @@ def _derive_ikrig_name(skeletal_mesh_path: str) -> str:
     category="ue5_autorig",
     safety_tier=SafetyTier.MODERATE,
     aliases=["autorig-humanoid", "autorig"],
-    title="Autorig Humanoid IKRig (validate + 9-chain, native :8090)",
+    title="Autorig Humanoid IKRig (validate + 7-chain, native :8090)",
 )
 def ue5_autorig_humanoid(
     skeletal_mesh_path: Annotated[str, "UE content path to the SkeletalMesh, e.g. /Game/Test/Skel/SK_X/SkeletalMeshes/SK_X"],
@@ -339,13 +356,14 @@ def ue5_autorig_humanoid(
     ikrig_dest: Annotated[str, "Content path for the IKRig asset"] = "/Game/Test/Skel",
     timeout_s: Annotated[float, "Max seconds to wait for the deferred game-thread validate+rig"] = 60.0,
 ) -> ToolResult:
-    """Validate a skeletal mesh as humanoid then build a 9-chain IKRig — fail-closed BOTH ways.
+    """Validate a skeletal mesh as humanoid then build a 7-chain IKRig — fail-closed BOTH ways.
 
     Validates all 23 Mannequin core bones are present (via the UE5.7 SkeletalMeshComponent
-    bone enumerator), and ONLY then creates an IKRigDefinition and adds the 9 retarget chains
-    (Root/Pelvis/Spine/Neck/Head/Left+RightArm/Left+RightLeg), re-querying to confirm all 9
-    resolved. Reports FAILURE if bones can't be read, any Mannequin core bone is missing
-    (non-humanoid), or fewer than 9 chains land — never ships a broken or partial rig.
+    bone enumerator), and ONLY then creates an IKRigDefinition and adds the 7 retarget chains
+    (Root/Spine/Head/Left+RightArm/Left+RightLeg) — the canon matching the game's IKRig_Mannequin/
+    IKRig_SciFiTrooper so auto_map hits 7/7 — re-querying to confirm all 7 resolved. Reports
+    FAILURE if bones can't be read, any Mannequin core bone is missing (non-humanoid), or fewer
+    than 7 chains land — never ships a broken or partial rig.
 
     Deferred transport: runs on UE5's game thread; stages a handshake script under
     <project>/Saved/Bionics/autorig, fires it, polls a result file for up to timeout_s.
@@ -409,6 +427,7 @@ def ue5_autorig_humanoid(
         "configured_count": ikrig.get("configured_count"),
         "verified_count": ikrig.get("verified_count"),
         "unique_verified_count": ikrig.get("unique_verified_count"),
+        "expected_count": ikrig.get("expected_count"),
         "cleared_count": ikrig.get("cleared_count"),
         "cleared_incomplete": ikrig.get("cleared_incomplete"),
         "stage": data.get("stage"),
@@ -419,37 +438,39 @@ def ue5_autorig_humanoid(
     }
 
     # Host backstop (defense-in-depth vs a UE5-side gate regression): the rig must land EXACTLY
-    # the canonical 9 UNIQUE chains. It must replicate every clause of the UE5-side gate so it
-    # still catches the dup state if that gate regresses — count alone is not enough, because the
-    # duplicate chain NAMES are what break the IK Retargeter (a 9-entry/8-unique rig is broken):
-    #   - verified_count 0  = re-query failed (allowed — UE5-side trusts the 9 adds)
-    #   - verified_count 9 AND unique 9 = good
-    #   - 18/27 (count) OR 9-count/<9-unique (dup-at-9) OR count != unique = dup pollution -> reject
-    #   - cleared_incomplete = stale chains survived the pre-clear -> reject (never ship a stacked rig)
+    # `expected` UNIQUE chains (= len(CHAINS), 7 for Sworder; reported by the UE5 script). It must
+    # replicate every clause of the UE5-side gate so it still catches the dup state if that gate
+    # regresses — count alone is not enough, because the duplicate chain NAMES are what break the
+    # IK Retargeter (an expected-count/fewer-unique rig is broken):
+    #   - verified_count 0  = re-query failed (allowed — UE5-side trusts the adds)
+    #   - verified_count == expected AND unique == expected = good
+    #   - any other count, a non-{0,expected} unique count, count != unique, or an incomplete
+    #     pre-clear (stale chains survived) = dup pollution -> reject (never ship a stacked rig)
     vc = ikrig.get("verified_count")
     uv = ikrig.get("unique_verified_count")
-    dup_count = isinstance(vc, int) and vc not in (0, 9)
-    dup_unique = isinstance(uv, int) and uv not in (0, 9)
+    expected = ikrig.get("expected_count") or _CANONICAL_CHAIN_COUNT
+    dup_count = isinstance(vc, int) and vc not in (0, expected)
+    dup_unique = isinstance(uv, int) and uv not in (0, expected)
     dup_mismatch = isinstance(vc, int) and isinstance(uv, int) and vc != uv
     if bool(data.get("ok")) and (dup_count or dup_unique or dup_mismatch or ikrig.get("cleared_incomplete")):
         reason = (
-            f"dup-pollution backstop: verified={vc} unique={uv} "
+            f"dup-pollution backstop: verified={vc} unique={uv} expected={expected} "
             f"cleared_incomplete={ikrig.get('cleared_incomplete')} — rig is not exactly the canonical "
-            "9 unique chains (the 27-chain retarget blocker — UE5-side gate should have caught this)"
+            f"{expected} unique chains (the retarget blocker — UE5-side gate should have caught this)"
         )
         return ToolResult(
             ok=False,
-            content=f"Autorig of {ikrig_name} rejected: not exactly 9 unique chains (verified={vc} unique={uv}).",
+            content=f"Autorig of {ikrig_name} rejected: not exactly {expected} unique chains (verified={vc} unique={uv}).",
             data=payload,
             error=reason,
         )
 
-    # Fail-closed: the seed's RES["ok"] is True only on humanoid + 9 configured + verified.
+    # Fail-closed: the UE5-side RES["ok"] is True only on humanoid + expected configured + verified.
     if bool(data.get("ok")):
         return ToolResult.success(
             content=(
                 f"Rigged {ikrig_name}: humanoid ({bones.get('count')} bones), "
-                f"{ikrig.get('configured_count')}/9 chains @ {ikrig.get('path')}"
+                f"{ikrig.get('configured_count')}/{ikrig.get('expected_count')} chains @ {ikrig.get('path')}"
             ),
             data=payload,
         )

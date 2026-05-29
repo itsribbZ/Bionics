@@ -86,8 +86,10 @@ class TestAutorig:
             "bones": {"count": 23, "method": "SkeletalMeshComponent", "humanoid": True, "mannequin_missing": []},
             "ikrig": {
                 "path": "/Game/Test/Skel/IKR_X",
-                "configured_count": 9,
-                "verified_count": 9,
+                "configured_count": 7,
+                "verified_count": 7,
+                "unique_verified_count": 7,
+                "expected_count": 7,
             },
             "errors": [],
         }
@@ -105,7 +107,7 @@ class TestAutorig:
 
         assert r.ok is True
         assert r.data["humanoid"] is True
-        assert r.data["configured_count"] == 9
+        assert r.data["configured_count"] == 7
         assert r.data["ikrig_name"] == "IKR_X"
 
     @staticmethod
@@ -129,62 +131,63 @@ class TestAutorig:
         payload = {
             "ok": True, "stage": "done",
             "bones": {"count": 23, "method": "SkeletalMeshComponent", "humanoid": True, "mannequin_missing": []},
-            "ikrig": {"path": "/Game/Test/Skel/IKR_X", "configured_count": 9,
-                      "verified_count": 9, "unique_verified_count": 9, "cleared_count": 9},
+            "ikrig": {"path": "/Game/Test/Skel/IKR_X", "configured_count": 7,
+                      "verified_count": 7, "unique_verified_count": 7, "expected_count": 7, "cleared_count": 7},
             "errors": [],
         }
         r = self._run_with_payload(ue5_autorig, tmp_path, payload)
         assert r.ok is True
-        assert r.data["cleared_count"] == 9          # the prior run's 9 chains were removed first
-        assert r.data["unique_verified_count"] == 9  # rebuilt to exactly the canonical 9
+        assert r.data["cleared_count"] == 7          # the prior run's 7 chains were removed first
+        assert r.data["unique_verified_count"] == 7  # rebuilt to exactly the canonical 7
 
-    def test_dup_pollution_backstop_rejects_18(self, tmp_path):
-        """Host backstop: even if the UE5-side ok flag regresses to True, 18 chains is rejected."""
+    def test_dup_pollution_backstop_rejects_overcount(self, tmp_path):
+        """Host backstop: even if the UE5-side ok flag regresses to True, an over-count (a 2x stack
+        = 14 chains of the 7-canon) is rejected."""
         from bionics_tools import ue5_autorig
 
         payload = {
             "ok": True, "stage": "done",  # deliberately ok=True to prove the backstop is independent
             "bones": {"count": 23, "method": "SkeletalMeshComponent", "humanoid": True, "mannequin_missing": []},
-            "ikrig": {"path": "/Game/Test/Skel/IKR_X", "configured_count": 9,
-                      "verified_count": 18, "unique_verified_count": 9, "cleared_count": 0},
+            "ikrig": {"path": "/Game/Test/Skel/IKR_X", "configured_count": 7,
+                      "verified_count": 14, "unique_verified_count": 7, "expected_count": 7, "cleared_count": 0},
             "errors": [],
         }
         r = self._run_with_payload(ue5_autorig, tmp_path, payload)
         assert r.ok is False
         assert "dup-pollution backstop" in r.error
-        assert "18" in r.error
+        assert "14" in r.error
 
     def test_backstop_allows_zero_verified(self, tmp_path):
-        """verified_count 0 = re-query genuinely failed (UE5-side trusts the 9 adds) — NOT dup
+        """verified_count 0 = re-query genuinely failed (UE5-side trusts the adds) — NOT dup
         pollution, so the backstop must not fire."""
         from bionics_tools import ue5_autorig
 
         payload = {
             "ok": True, "stage": "done",
             "bones": {"count": 23, "method": "SkeletalMeshComponent", "humanoid": True, "mannequin_missing": []},
-            "ikrig": {"path": "/Game/Test/Skel/IKR_X", "configured_count": 9,
-                      "verified_count": 0, "unique_verified_count": 0, "cleared_count": 0},
+            "ikrig": {"path": "/Game/Test/Skel/IKR_X", "configured_count": 7,
+                      "verified_count": 0, "unique_verified_count": 0, "expected_count": 7, "cleared_count": 0},
             "errors": [],
         }
         r = self._run_with_payload(ue5_autorig, tmp_path, payload)
         assert r.ok is True
 
-    def test_dup_pollution_backstop_rejects_verified9_unique8(self, tmp_path):
-        """Dup-at-9: 9 chain entries but only 8 unique names (one duplicated) — the count-only
-        check can't see this, so the uniqueness clause must reject it."""
+    def test_dup_pollution_backstop_rejects_dup_at_expected(self, tmp_path):
+        """Dup-at-expected: exactly 7 chain entries but only 6 unique names (one duplicated) — the
+        count clause can't see it (7 == expected), so the uniqueness/mismatch clause must reject it."""
         from bionics_tools import ue5_autorig
 
         payload = {
             "ok": True, "stage": "done",  # ok=True to prove the backstop is independent of the UE5 gate
             "bones": {"count": 23, "method": "SkeletalMeshComponent", "humanoid": True, "mannequin_missing": []},
-            "ikrig": {"path": "/Game/Test/Skel/IKR_X", "configured_count": 9,
-                      "verified_count": 9, "unique_verified_count": 8, "cleared_count": 0},
+            "ikrig": {"path": "/Game/Test/Skel/IKR_X", "configured_count": 7,
+                      "verified_count": 7, "unique_verified_count": 6, "expected_count": 7, "cleared_count": 0},
             "errors": [],
         }
         r = self._run_with_payload(ue5_autorig, tmp_path, payload)
         assert r.ok is False
         assert "dup-pollution backstop" in r.error
-        assert "unique=8" in r.error
+        assert "unique=6" in r.error
 
     def test_backstop_rejects_cleared_incomplete(self, tmp_path):
         """An incomplete pre-clear (stale chains survived the clear) must be rejected even if the
@@ -194,8 +197,8 @@ class TestAutorig:
         payload = {
             "ok": True, "stage": "done",
             "bones": {"count": 23, "method": "SkeletalMeshComponent", "humanoid": True, "mannequin_missing": []},
-            "ikrig": {"path": "/Game/Test/Skel/IKR_X", "configured_count": 9,
-                      "verified_count": 0, "unique_verified_count": 0,
+            "ikrig": {"path": "/Game/Test/Skel/IKR_X", "configured_count": 7,
+                      "verified_count": 0, "unique_verified_count": 0, "expected_count": 7,
                       "cleared_count": 3, "cleared_incomplete": True},
             "errors": ["pre-clear incomplete — 5 chain(s) survived removal"],
         }
