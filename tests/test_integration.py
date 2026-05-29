@@ -231,7 +231,7 @@ class TestConfigConsumption:
         from core.paths import PROJECT_ROOT
         with open(PROJECT_ROOT / "config.yaml") as f:
             cfg = yaml.safe_load(f)
-        assert cfg["bionics"]["version"] == "0.8.0"
+        assert cfg["bionics"]["version"] == "0.8.1"
 
 
 class TestWatchEnginePipeline:

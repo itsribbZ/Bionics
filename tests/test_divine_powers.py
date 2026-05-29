@@ -187,6 +187,18 @@ class TestExecutePlanStepsObservability:
     success=False with empty error string. Both fixed in v0.7.5.
     """
 
+    @pytest.fixture(autouse=True)
+    def _force_rc_fallback(self):
+        """These tests target the RC-fallback backstop, so force the native :8090 path
+        unreachable — otherwise a live bridge (UE5 open) would intercept the step and the
+        mocked bridge.execute_python would never run. The native-first path itself is
+        covered by test_planner_native_tool_wiring.TestNativeFirstPythonStep."""
+        with patch(
+            "bionics_tools._ue5_native_exec.run_python_native",
+            return_value={"reachable": False, "error": "native bridge off (test)"},
+        ):
+            yield
+
     def _make_planner(self):
         from core.auto_planner import AutoPlanner
         return AutoPlanner(ue5_project_path="", api_key="dummy")

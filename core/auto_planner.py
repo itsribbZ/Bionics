@@ -818,6 +818,67 @@ class AutoPlanner:
         except Exception as e:  # noqa: BLE001 — surface any tool failure as a step error
             return {"success": False, "error": f"bionics_tool {tool_name} raised: {e}"}
 
+    def _execute_python_step(
+        self, bridge, script: str, timeout_s: float = 60.0
+    ) -> tuple[bool, str, str]:
+        """Execute a plan step's Python in UE5 — native :8090 FIRST, RC fallback.
+
+        The native C++ :8090 bridge runs Python on the game thread and is NOT subject to the
+        RC HTTP "Object Default__PythonScriptLibrary cannot be accessed remotely" 400 that
+        blocks bridge.execute_python in UE5.7 (nor to the dead RC multicast discovery). So we
+        try native first via run_python_native (which wraps the script to capture
+        stdout/stderr + exceptions into a polled result JSON), and fall back to the RC
+        bridge.execute_python strategies ONLY when the native bridge is unreachable — so a
+        setup without the BionicsBridge plugin behaves exactly as before. Returns
+        (success, output_text, error).
+        """
+        # Native-first.
+        try:
+            from bionics_tools._ue5_native_exec import run_python_native
+            from bionics_tools.ue5_native import call_bridge_tool
+            native = run_python_native(script, timeout_s, invoke=call_bridge_tool)
+        except Exception as e:  # noqa: BLE001 — any native-path failure falls back to RC
+            native = {"reachable": False, "error": f"native exec path unavailable: {e}"}
+
+        if native.get("reachable"):
+            success = bool(native.get("success"))
+            output_text = (native.get("output") or "").strip()
+            error = (native.get("error") or "") if not success else ""
+            if not success and not error:
+                error = (
+                    "Native :8090 exec returned success=False with no error and no output "
+                    "(script may have evaluated to inert code)."
+                )
+            return success, output_text, error
+
+        # Fallback: RC bridge.execute_python (3-strategy). Preserves the v0.7.5 empty-error
+        # backstop so a silent RC failure still yields an observable diagnostic.
+        exec_result = bridge.execute_python(script)
+        output = (exec_result.data or {}).get("output", [])
+        if isinstance(output, list):
+            output_text = "\n".join(
+                ln.get("output", "") if isinstance(ln, dict) else str(ln)
+                for ln in output
+            ).strip()
+        else:
+            output_text = str(output)
+
+        if not exec_result.success and not exec_result.error:
+            if output_text:
+                error = (
+                    f"UE5 bridge returned success=False with no error message. "
+                    f"Captured output: {output_text[:300]}"
+                )
+            else:
+                error = (
+                    "UE5 bridge returned success=False with no error message and no output. "
+                    "Likely causes: script raised silently, bridge transport dropped the response, "
+                    "or script_content evaluated to inert code (no side effects)."
+                )
+        else:
+            error = exec_result.error if not exec_result.success else ""
+        return bool(exec_result.success), output_text, error
+
     def _execute_plan_steps(self, plan: dict, bridge, run_id: str | None = None) -> list[dict]:
         """Execute Python/script steps from a plan via UE5 bridge.
 
@@ -892,37 +953,15 @@ class AutoPlanner:
                                            _step_script, _step_start, results[-1])
                     continue
 
-                self._log(f"Step {idx}: Executing Python in UE5...")
-                exec_result = bridge.execute_python(script_content)
-                output = exec_result.data.get("output", [])
-                if isinstance(output, list):
-                    output_text = "\n".join(
-                        l.get("output", "") if isinstance(l, dict) else str(l)
-                        for l in output
-                    ).strip()
-                else:
-                    output_text = str(output)
-                self._log(f"Step {idx}: {'OK' if exec_result.success else 'FAIL'} - {output_text[:200]}")
-
-                # v0.7.5 empty-error backstop
-                if not exec_result.success and not exec_result.error:
-                    if output_text:
-                        synthesized_error = (
-                            f"UE5 bridge returned success=False with no error message. "
-                            f"Captured output: {output_text[:300]}"
-                        )
-                    else:
-                        synthesized_error = (
-                            "UE5 bridge returned success=False with no error message and no output. "
-                            "Likely causes: script raised silently, bridge transport dropped the response, "
-                            "or script_content evaluated to inert code (no side effects)."
-                        )
-                else:
-                    synthesized_error = exec_result.error if not exec_result.success else ""
+                self._log(f"Step {idx}: Executing Python in UE5 (native :8090 first)...")
+                step_success, output_text, synthesized_error = self._execute_python_step(
+                    bridge, script_content
+                )
+                self._log(f"Step {idx}: {'OK' if step_success else 'FAIL'} - {output_text[:200]}")
 
                 results.append({
                     "step": idx,
-                    "success": exec_result.success,
+                    "success": step_success,
                     "output": output_text[:500],
                     "error": synthesized_error,
                 })
@@ -941,13 +980,15 @@ class AutoPlanner:
                     self._emit_step_event(run_id, idx, method, description,
                                            _step_script, _step_start, results[-1])
                     continue
-                self._log(f"Step {idx}: Running {script_name}...")
-                exec_result = bridge.execute_python(f"exec(open(r'{script_path}').read())")
+                self._log(f"Step {idx}: Running {script_name} (native :8090 first)...")
+                step_success, _output_text, step_error = self._execute_python_step(
+                    bridge, f"exec(open(r'{script_path}').read())"
+                )
                 results.append({
                     "step": idx,
-                    "success": exec_result.success,
+                    "success": step_success,
                     "script": script_name,
-                    "error": exec_result.error if not exec_result.success else "",
+                    "error": step_error,
                 })
                 self._emit_step_event(run_id, idx, method, description,
                                        _step_script, _step_start, results[-1])

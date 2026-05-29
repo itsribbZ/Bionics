@@ -129,3 +129,134 @@ class TestExecuteDispatch:
             results = ap._execute_plan_steps(plan, None)
         m.assert_not_called()
         assert results[0]["success"] is None
+
+
+# ============================================================================
+# Native-first ue5_python / existing_script execution (v0.8.1)
+# ============================================================================
+
+
+class TestNativeFirstPythonStep:
+    """v0.8.1: planner ue5_python/existing_script steps run native :8090 FIRST, falling back
+    to the RC bridge.execute_python ONLY when the native bridge is unreachable. Fixes the
+    2026-05-29 live-fire finding — RC PythonScriptLibrary is blocked in UE5.7 ("Object
+    Default__PythonScriptLibrary cannot be accessed remotely"), while the native game-thread
+    bridge runs the script fine. Native path mocked via run_python_native (no UE5)."""
+
+    def _planner(self):
+        return AutoPlanner(ue5_project_path="", api_key="dummy")
+
+    def test_native_reachable_short_circuits_rc(self):
+        from unittest.mock import MagicMock
+        bridge = MagicMock()
+        with patch(
+            "bionics_tools._ue5_native_exec.run_python_native",
+            return_value={"reachable": True, "success": True, "output": "native-ok", "error": ""},
+        ):
+            success, output, error = self._planner()._execute_python_step(bridge, "import unreal")
+        assert success is True
+        assert output == "native-ok"
+        assert error == ""
+        bridge.execute_python.assert_not_called()  # native handled it — RC never touched
+
+    def test_native_unreachable_falls_back_to_rc(self):
+        from unittest.mock import MagicMock
+        bridge = MagicMock()
+        bridge.execute_python.return_value = MagicMock(
+            success=True, error="", data={"output": [{"output": "rc-ok"}]}
+        )
+        with patch(
+            "bionics_tools._ue5_native_exec.run_python_native",
+            return_value={"reachable": False, "error": "bridge off"},
+        ):
+            success, output, error = self._planner()._execute_python_step(bridge, "import unreal")
+        assert success is True
+        assert output == "rc-ok"
+        bridge.execute_python.assert_called_once()
+
+    def test_native_failure_with_error_propagates(self):
+        from unittest.mock import MagicMock
+        bridge = MagicMock()
+        with patch(
+            "bionics_tools._ue5_native_exec.run_python_native",
+            return_value={"reachable": True, "success": False, "output": "",
+                          "error": "AttributeError: no attr 'foo'"},
+        ):
+            success, _output, error = self._planner()._execute_python_step(bridge, "unreal.foo()")
+        assert success is False
+        assert "AttributeError" in error
+        bridge.execute_python.assert_not_called()  # a real native failure — do NOT retry dead RC
+
+    def test_native_failure_empty_error_synthesizes(self):
+        from unittest.mock import MagicMock
+        bridge = MagicMock()
+        with patch(
+            "bionics_tools._ue5_native_exec.run_python_native",
+            return_value={"reachable": True, "success": False, "output": "", "error": ""},
+        ):
+            success, _output, error = self._planner()._execute_python_step(bridge, "pass")
+        assert success is False
+        assert error != "", "empty native error must be replaced by a synthesized diagnostic"
+
+    def test_ue5_python_plan_step_routes_through_native(self):
+        """End-to-end: a ue5_python plan step is dispatched via the native-first helper."""
+        from unittest.mock import MagicMock
+        bridge = MagicMock()
+        plan = {"steps": [{
+            "index": 1, "execution_method": "ue5_python",
+            "description": "spawn", "script_content": "import unreal\nunreal.log('hi')",
+        }]}
+        with patch(
+            "bionics_tools._ue5_native_exec.run_python_native",
+            return_value={"reachable": True, "success": True, "output": "hi", "error": ""},
+        ):
+            results = self._planner()._execute_plan_steps(plan, bridge)
+        assert results[0]["success"] is True
+        assert results[0]["output"] == "hi"
+        bridge.execute_python.assert_not_called()
+
+    def test_scratch_dir_failure_falls_back_to_rc(self):
+        """A local-FS failure (scratch dir uncreatable) is NOT a bridge signal — it must fall
+        back to RC, not be reported as a native failure. Regression guard for the v0.8.1
+        review HIGH finding (scratch-None previously returned reachable=True, killing fallback)."""
+        from unittest.mock import MagicMock
+        bridge = MagicMock()
+        bridge.execute_python.return_value = MagicMock(
+            success=True, error="", data={"output": [{"output": "rc-ok"}]}
+        )
+        # Real run_python_native runs; only the scratch dir is forced to fail.
+        with patch("bionics_tools._ue5_native_exec.resolve_scratch_dir", return_value=None):
+            success, output, _error = self._planner()._execute_python_step(bridge, "import unreal")
+        assert success is True
+        assert output == "rc-ok"
+        bridge.execute_python.assert_called_once()  # scratch-fail must fall through to RC
+
+
+class TestRunPythonNative:
+    """v0.8.1: the shared run_python_native wrapper — uuid-suffixed scratch names + cleanup."""
+
+    def test_uuid_filenames_and_cleanup(self, tmp_path):
+        from unittest.mock import MagicMock
+
+        from bionics_tools import _ue5_native_exec as nx
+
+        result_path = tmp_path / "step_result_deadbeef.json"
+
+        def fake_fire(tool, args):
+            # The game thread would write the result; simulate it for the uuid'd path.
+            result_path.write_text('{"success": true, "output": "native-ran", "error": ""}',
+                                   encoding="utf-8")
+            return ToolResult.success(content="deferred")
+
+        fake_uuid = MagicMock()
+        fake_uuid.hex = "deadbeef00000000"  # -> uid "deadbeef"
+        with patch.object(nx, "resolve_scratch_dir", return_value=tmp_path), \
+             patch.object(nx.uuid, "uuid4", return_value=fake_uuid), \
+             patch("bionics_tools._ue5_native_exec.time.sleep"):
+            res = nx.run_python_native("import unreal", 5.0, invoke=fake_fire)
+
+        assert res["reachable"] is True
+        assert res["success"] is True
+        assert res["output"] == "native-ran"
+        # Best-effort cleanup removed every handshake file (no per-call accumulation).
+        assert not list(tmp_path.glob("step_*")), "scratch handshake files must be cleaned up"

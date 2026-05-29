@@ -24,10 +24,10 @@ from __future__ import annotations
 
 import json
 import re
-import time
 from pathlib import Path
 from typing import Annotated
 
+from bionics_tools._ue5_native_exec import fire_and_poll, resolve_scratch_dir
 from bionics_tools.ue5_native import _configured_ue5_project_dir, call_bridge_tool
 from core.bridge import SafetyTier, ToolResult, bionics_tool
 
@@ -140,24 +140,9 @@ unreal.log(
 
 
 def _resolve_scratch_dir() -> Path | None:
-    """Scratch dir for the import handshake files (params + script + result).
-
-    Lives under the UE5 project's Saved/ so BOTH this process and the editor can
-    read/write it; falls back to the system temp dir (same user) when the project
-    path isn't configured. Returns None only if the dir cannot be created.
-    """
-    proj = _configured_ue5_project_dir()
-    if proj:
-        d = Path(proj) / "Saved" / "Bionics" / "uasvc"
-    else:
-        import tempfile
-
-        d = Path(tempfile.gettempdir()) / "bionics_uasvc"
-    try:
-        d.mkdir(parents=True, exist_ok=True)
-        return d
-    except OSError:
-        return None
+    """Scratch dir for the import handshake files — delegates to the shared transport.
+    Kept as a module-level seam so unit tests can patch ue5_uasvc._resolve_scratch_dir."""
+    return resolve_scratch_dir("uasvc")
 
 
 def _preflight_fbx_interchange(project_dir: str) -> tuple[bool, str]:
@@ -194,39 +179,14 @@ def _fire_and_poll(
     timeout_s: float,
     poll_interval_s: float = 0.5,
 ) -> tuple[ToolResult | None, dict | None]:
-    """Fire a UE5-side script over :8090 (deferred game-thread exec) and poll for its
-    result JSON. Returns (error_result, None) on failure, or (None, parsed_dict) on success.
-
-    The caller must delete result_path BEFORE staging, so any appearance here is a fresh
-    result (no mtime races). The bridge returns deferred=true immediately, so the real
-    result only exists once the game thread runs the script and writes result_path.
-    """
-    cmd = f"py exec(open(r'{script_path.as_posix()}').read())"
-    fire = call_bridge_tool("execute_console_command", {"command": cmd})
-    if not fire.ok:
-        return ToolResult.failure(
-            f"Bridge could not queue the import command: {fire.error}. "
-            "Is UE5 + BionicsBridge running? (native :8090)"
-        ), None
-
-    deadline = time.monotonic() + max(1.0, float(timeout_s))
-    last_err = ""
-    while time.monotonic() < deadline:
-        if result_path.exists():
-            try:
-                return None, json.loads(result_path.read_text(encoding="utf-8"))
-            except (ValueError, OSError) as e:
-                last_err = str(e)  # result file mid-write — keep polling
-        time.sleep(poll_interval_s)
-
-    msg = (
-        f"Timed out after {float(timeout_s):.0f}s waiting for the deferred import result "
-        f"({result_path.name}). The command was queued to UE5's game thread — check the "
-        f"editor log for the {_RESULT_MARKER} marker."
+    """Fire the import script over :8090 and poll its result JSON — delegates to the shared
+    transport. ``call_bridge_tool`` is passed through (rather than imported inside the shared
+    module) so unit tests that patch ue5_uasvc.call_bridge_tool still intercept the fire."""
+    return fire_and_poll(
+        script_path, result_path, timeout_s,
+        invoke=call_bridge_tool, noun="import", marker=_RESULT_MARKER,
+        poll_interval_s=poll_interval_s,
     )
-    if last_err:
-        msg += f" Last read error: {last_err}"
-    return ToolResult.failure(msg), None
 
 
 # ============================================================================

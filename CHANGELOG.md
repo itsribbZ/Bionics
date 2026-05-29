@@ -2,6 +2,27 @@
 
 All notable changes to Bionics will be listed here. Semver: MAJOR.MINOR.PATCH.
 
+## [0.8.1] — 2026-05-29 (Native-First Planner Python Execution + Rule-of-Three Transport Extraction)
+
+PATCH bump: a bug fix for the finding the v0.8.0 live-fire surfaced, plus the rule-of-three extraction it required. Live-verified end-to-end against UE5 5.7 + BionicsBridge :8090 on 2026-05-29.
+
+### Fixed — planner Python steps now run native-first (the UE5.7-correct path)
+- `core/auto_planner.py` — new `_execute_python_step(bridge, script)` runs a plan step's Python over the native :8090 bridge FIRST, falling back to the RC `bridge.execute_python` 3-strategy path ONLY when the native bridge is unreachable. The `ue5_python` and `existing_script` branches of `_execute_plan_steps` both route through it. The v0.7.5 empty-error backstop is preserved in the fallback branch.
+- **Why**: the v0.8.0 live-fire (`divine_powers --prompt-key rig`) showed the planner's Doctor-fix step failing with `Object Default__PythonScriptLibrary cannot be accessed remotely` (HTTP 400) — `bridge.execute_python`'s three strategies are all RC-based (UDP multicast discovery, RC HTTP `PythonScriptLibrary`, RC console), and all are dead/blocked in UE5.7. The native C++ :8090 bridge runs Python on the game thread and is not subject to that restriction. Extends the T1.A native-first re-routing to the planner's Python-execution steps.
+- **Receipt**: re-running the rig live-fire after the fix → 5/5 plan steps `success=true`, zero RC-400 errors (was: step 1 ok, steps 2–3 silent-failed on the 400). The `animbp_doctor.py` fix-steps now actually run in-engine.
+
+### Changed — rule-of-three transport extraction (behavior-preserving)
+- NEW `bionics_tools/_ue5_native_exec.py` — the deferred fire-and-poll handshake (`resolve_scratch_dir`, `fire_and_poll`, `_poll_for_result`) extracted from `ue5_uasvc.py` + `ue5_autorig.py` (second + third consumers), plus a generic `run_python_native(script, timeout, invoke)` that wraps an arbitrary script to capture its stdout/stderr + exception into a polled result JSON (the game-thread bridge has no synchronous return).
+- `ue5_uasvc.py` / `ue5_autorig.py` — `_resolve_scratch_dir`/`_fire_and_poll` are now thin wrappers over the shared module (kept as module-level seams so unit-test patches still intercept; `noun`/`marker` reproduce the original error strings verbatim). Dropped now-unused `import time` (both) and `_configured_ue5_project_dir` (autorig).
+
+### Tests (+5, 520 → 525 GREEN)
+- `test_planner_native_tool_wiring.py::TestNativeFirstPythonStep` (+5): native short-circuits RC; unreachable native falls back to RC; a real native failure does NOT fall back (no dead-RC retry); empty native error is synthesized; end-to-end `ue5_python` plan step routes native.
+- `test_divine_powers.py` — autouse `_force_rc_fallback` fixture on `TestExecutePlanStepsObservability` forces native unreachable so the RC-backstop tests stay deterministic when a live bridge is up. `time.sleep`/`time.monotonic` patch targets in the uasvc/autorig tests repointed to `_ue5_native_exec` (where the poll loop now lives).
+
+### Known / Next
+- The diagnosis-layer `[HIGH] Could not run animbp_doctor.py inside UE5` finding persists — that is the MVP Doctor's OWN diagnose-time execution (a separate code path from the planner), still RC-routed. Next: extend native-first to the doctor's in-engine execution.
+- `run_python_native` uses a fixed `Saved/Bionics/planner` scratch dir with fixed filenames; safe for sequential steps within a plan, but concurrent `divine_powers` runs would race — add a run-id/uuid suffix if concurrency is introduced.
+
 ## [0.8.0] — 2026-05-29 (Fork A — Skeletal Pipeline Native Tools + Planner bionics_tool Execution, Live-Verified)
 
 MINOR bump: new native-first tool surface + a new planner execution method. Productionizes the 2026-05-28 live-proven `.glb → SkeletalMesh → bone-validate → IKRig` pipeline into fail-closed Bionics tools and makes them reachable from the NL planner. All increments live-verified end-to-end against UE5 5.7 + the BionicsBridge `:8090` rail on 2026-05-29.

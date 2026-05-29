@@ -167,7 +167,7 @@ class TestImportSkeletal:
 
         with patch.object(ue5_uasvc, "_resolve_scratch_dir", return_value=tmp_path), \
              patch.object(ue5_uasvc, "call_bridge_tool", side_effect=fake_fire), \
-             patch("bionics_tools.ue5_uasvc.time.sleep"):
+             patch("bionics_tools._ue5_native_exec.time.sleep"):
             r = ue5_uasvc.ue5_uasvc_import_skeletal(file_path="C:/x/SK_X.glb", asset_name="SK_X")
 
         assert r.ok is True
@@ -192,7 +192,7 @@ class TestImportSkeletal:
 
         with patch.object(ue5_uasvc, "_resolve_scratch_dir", return_value=tmp_path), \
              patch.object(ue5_uasvc, "call_bridge_tool", side_effect=fake_fire), \
-             patch("bionics_tools.ue5_uasvc.time.sleep"):
+             patch("bionics_tools._ue5_native_exec.time.sleep"):
             r = ue5_uasvc.ue5_uasvc_import_skeletal(file_path="C:/x/SK_X.glb", asset_name="SK_X")
 
         assert r.ok is False
@@ -208,7 +208,7 @@ class TestImportSkeletal:
                  "call_bridge_tool",
                  return_value=ToolResult.failure("Bridge unreachable: connection refused"),
              ), \
-             patch("bionics_tools.ue5_uasvc.time.sleep"):
+             patch("bionics_tools._ue5_native_exec.time.sleep"):
             r = ue5_uasvc.ue5_uasvc_import_skeletal(file_path="C:/x/SK_X.glb", asset_name="SK_X")
 
         assert r.ok is False
@@ -221,8 +221,8 @@ class TestImportSkeletal:
         seq = iter([0.0, 0.5] + [999.0] * 20)
         with patch.object(ue5_uasvc, "_resolve_scratch_dir", return_value=tmp_path), \
              patch.object(ue5_uasvc, "call_bridge_tool", return_value=ToolResult.success(content="deferred")), \
-             patch("bionics_tools.ue5_uasvc.time.sleep"), \
-             patch("bionics_tools.ue5_uasvc.time.monotonic", side_effect=lambda: next(seq)):
+             patch("bionics_tools._ue5_native_exec.time.sleep"), \
+             patch("bionics_tools._ue5_native_exec.time.monotonic", side_effect=lambda: next(seq)):
             r = ue5_uasvc.ue5_uasvc_import_skeletal(
                 file_path="C:/x/SK_X.glb", asset_name="SK_X", timeout_s=5.0
             )
@@ -262,7 +262,7 @@ class TestImportSkeletal:
         with patch.object(ue5_uasvc, "_configured_ue5_project_dir", return_value=str(tmp_path)), \
              patch.object(ue5_uasvc, "_resolve_scratch_dir", return_value=tmp_path), \
              patch.object(ue5_uasvc, "call_bridge_tool", side_effect=fake_fire), \
-             patch("bionics_tools.ue5_uasvc.time.sleep"):
+             patch("bionics_tools._ue5_native_exec.time.sleep"):
             r = ue5_uasvc.ue5_uasvc_import_skeletal(
                 file_path="C:/x/SK_X.fbx", asset_name="SK_X", skip_preflight=True
             )

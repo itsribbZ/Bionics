@@ -11,9 +11,8 @@ Fail-closed BOTH ways (kills the upstream WARN-and-continue false-pass):
   - IKRig chains re-queried after add          -> ok only if all 9 resolve
 
 Transport mirrors ue5_uasvc (deferred ``py exec`` over :8090 + delete-then-poll a result
-file). NOTE: the fire-and-poll + scratch-dir helpers are intentionally duplicated from
-ue5_uasvc for now (second use of the pattern). When the assetdoctor in-engine validator
-becomes the third use, extract all three into a shared bionics_tools/_ue5_native_exec.py.
+file); the fire-and-poll + scratch-dir helpers now live in the shared
+bionics_tools/_ue5_native_exec.py (extracted on the third use — see that module).
 
 The front-to-back live import+rig is scripts/livefire_autorig.py (needs UE5 open).
 """
@@ -21,11 +20,11 @@ The front-to-back live import+rig is scripts/livefire_autorig.py (needs UE5 open
 from __future__ import annotations
 
 import json
-import time
 from pathlib import Path
 from typing import Annotated
 
-from bionics_tools.ue5_native import _configured_ue5_project_dir, call_bridge_tool
+from bionics_tools._ue5_native_exec import fire_and_poll, resolve_scratch_dir
+from bionics_tools.ue5_native import call_bridge_tool
 from core.bridge import SafetyTier, ToolResult, bionics_tool
 
 _RIG_MARKER = "BIONICS_RIG_RESULT"
@@ -209,25 +208,14 @@ unreal.log(
 
 
 # ============================================================================
-# Helpers (duplicated from ue5_uasvc — extract on the third use; see module docstring)
+# Helpers (thin wrappers over the shared bionics_tools/_ue5_native_exec transport)
 # ============================================================================
 
 
 def _resolve_scratch_dir() -> Path | None:
-    """Scratch dir for the rig handshake files, under the UE5 project's Saved/ (both
-    this process and the editor can read/write it); temp-dir fallback otherwise."""
-    proj = _configured_ue5_project_dir()
-    if proj:
-        d = Path(proj) / "Saved" / "Bionics" / "autorig"
-    else:
-        import tempfile
-
-        d = Path(tempfile.gettempdir()) / "bionics_autorig"
-    try:
-        d.mkdir(parents=True, exist_ok=True)
-        return d
-    except OSError:
-        return None
+    """Scratch dir for the rig handshake files — delegates to the shared transport.
+    Kept as a module-level seam so unit tests can patch ue5_autorig._resolve_scratch_dir."""
+    return resolve_scratch_dir("autorig")
 
 
 def _fire_and_poll(
@@ -236,36 +224,14 @@ def _fire_and_poll(
     timeout_s: float,
     poll_interval_s: float = 0.5,
 ) -> tuple[ToolResult | None, dict | None]:
-    """Fire the UE5-side script over :8090 (deferred game-thread exec) and poll for its
-    result JSON. Returns (error_result, None) on failure, or (None, parsed_dict) on success.
-    Caller deletes result_path before staging, so any appearance here is a fresh result.
-    """
-    cmd = f"py exec(open(r'{script_path.as_posix()}').read())"
-    fire = call_bridge_tool("execute_console_command", {"command": cmd})
-    if not fire.ok:
-        return ToolResult.failure(
-            f"Bridge could not queue the rig command: {fire.error}. "
-            "Is UE5 + BionicsBridge running? (native :8090)"
-        ), None
-
-    deadline = time.monotonic() + max(1.0, float(timeout_s))
-    last_err = ""
-    while time.monotonic() < deadline:
-        if result_path.exists():
-            try:
-                return None, json.loads(result_path.read_text(encoding="utf-8"))
-            except (ValueError, OSError) as e:
-                last_err = str(e)  # result file mid-write — keep polling
-        time.sleep(poll_interval_s)
-
-    msg = (
-        f"Timed out after {float(timeout_s):.0f}s waiting for the deferred rig result "
-        f"({result_path.name}). The command was queued to UE5's game thread — check the "
-        f"editor log for the {_RIG_MARKER} marker."
+    """Fire the validate-and-rig script over :8090 and poll its result JSON — delegates to
+    the shared transport. ``call_bridge_tool`` is passed through so unit tests that patch
+    ue5_autorig.call_bridge_tool still intercept the fire."""
+    return fire_and_poll(
+        script_path, result_path, timeout_s,
+        invoke=call_bridge_tool, noun="rig", marker=_RIG_MARKER,
+        poll_interval_s=poll_interval_s,
     )
-    if last_err:
-        msg += f" Last read error: {last_err}"
-    return ToolResult.failure(msg), None
 
 
 def _derive_ikrig_name(skeletal_mesh_path: str) -> str:

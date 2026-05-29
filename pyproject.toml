@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bionics-agent"
-version = "0.8.0"
+version = "0.8.1"
 description = "AI agent for Unreal Engine 5 — 187 tools, native C++ bridge with bearer-token auth + locked-origin CORS + Win32 DACL token hardening + auth-gated health-check fingerprinting, MCP-native, hooks + guardrails + OTel + WAL-backed vector memory + thread-safe sub-agent fan-out (DESTRUCTIVE-gated, async-context-safe) + async Tasks (DESTRUCTIVE-gated, auto-evicting) + Voyager self-verification + session progress tracker + session_id traversal guard + locked tool-registry reads + PyInstaller-frozen path resolution + thinking-budget-aware max_tokens"
 readme = "README.md"
 requires-python = ">=3.12"

@@ -98,7 +98,7 @@ class TestAutorig:
 
         with patch.object(ue5_autorig, "_resolve_scratch_dir", return_value=tmp_path), \
              patch.object(ue5_autorig, "call_bridge_tool", side_effect=fake_fire), \
-             patch("bionics_tools.ue5_autorig.time.sleep"):
+             patch("bionics_tools._ue5_native_exec.time.sleep"):
             r = ue5_autorig.ue5_autorig_humanoid(
                 skeletal_mesh_path="/Game/Test/Skel/SK_X/SkeletalMeshes/SK_X"
             )
@@ -127,7 +127,7 @@ class TestAutorig:
 
         with patch.object(ue5_autorig, "_resolve_scratch_dir", return_value=tmp_path), \
              patch.object(ue5_autorig, "call_bridge_tool", side_effect=fake_fire), \
-             patch("bionics_tools.ue5_autorig.time.sleep"):
+             patch("bionics_tools._ue5_native_exec.time.sleep"):
             r = ue5_autorig.ue5_autorig_humanoid(
                 skeletal_mesh_path="/Game/Test/Skel/SK_SW_Formahger/SkeletalMeshes/SK_SW_Formahger"
             )
@@ -153,7 +153,7 @@ class TestAutorig:
 
         with patch.object(ue5_autorig, "_resolve_scratch_dir", return_value=tmp_path), \
              patch.object(ue5_autorig, "call_bridge_tool", side_effect=fake_fire), \
-             patch("bionics_tools.ue5_autorig.time.sleep"):
+             patch("bionics_tools._ue5_native_exec.time.sleep"):
             r = ue5_autorig.ue5_autorig_humanoid(skeletal_mesh_path="/Game/X/SK_X")
 
         assert r.ok is False
@@ -168,7 +168,7 @@ class TestAutorig:
                  "call_bridge_tool",
                  return_value=ToolResult.failure("Bridge unreachable: connection refused"),
              ), \
-             patch("bionics_tools.ue5_autorig.time.sleep"):
+             patch("bionics_tools._ue5_native_exec.time.sleep"):
             r = ue5_autorig.ue5_autorig_humanoid(skeletal_mesh_path="/Game/X/SK_X")
 
         assert r.ok is False
@@ -180,8 +180,8 @@ class TestAutorig:
         seq = iter([0.0, 0.5] + [999.0] * 20)
         with patch.object(ue5_autorig, "_resolve_scratch_dir", return_value=tmp_path), \
              patch.object(ue5_autorig, "call_bridge_tool", return_value=ToolResult.success(content="deferred")), \
-             patch("bionics_tools.ue5_autorig.time.sleep"), \
-             patch("bionics_tools.ue5_autorig.time.monotonic", side_effect=lambda: next(seq)):
+             patch("bionics_tools._ue5_native_exec.time.sleep"), \
+             patch("bionics_tools._ue5_native_exec.time.monotonic", side_effect=lambda: next(seq)):
             r = ue5_autorig.ue5_autorig_humanoid(skeletal_mesh_path="/Game/X/SK_X", timeout_s=5.0)
 
         assert r.ok is False

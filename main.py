@@ -56,7 +56,7 @@ def main():
     sys.excepthook = exception_hook
 
     logger.info("=" * 60)
-    logger.info("BIONICS - AI Desktop Automation Agent v0.8.0")
+    logger.info("BIONICS - AI Desktop Automation Agent v0.8.1")
     logger.info("=" * 60)
 
     if not check_api_key():
