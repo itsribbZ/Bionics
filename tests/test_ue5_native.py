@@ -196,3 +196,121 @@ class TestLogTail:
 
         assert result.ok is False
         assert "Log file not found" in result.error
+
+
+# ============================================================================
+# _discover_bridge — token resolution (env > cwd-walk > config fallback)
+# ============================================================================
+
+
+class TestDiscoverBridge:
+    """Bridge URL/token resolution for native :8090 calls.
+
+    The config fallback (paths.ue5_project) exists because the MCP server runs with
+    cwd=Bionics repo, so the cwd-walk can't see <ue5_project>/.bionics-bridge/
+    instance.json — without it, native tools 401 against the live bridge. Env vars
+    and the cwd-walk keep priority; the config branch is a last resort before the
+    auth-disabled default.
+    """
+
+    @staticmethod
+    def _write_instance(project_dir, url, token):
+        import json
+
+        bridge_dir = project_dir / ".bionics-bridge"
+        bridge_dir.mkdir(parents=True, exist_ok=True)
+        (bridge_dir / "instance.json").write_text(
+            json.dumps({"url": url, "token": token}), encoding="utf-8"
+        )
+
+    def test_env_vars_take_priority(self, monkeypatch):
+        from bionics_tools import ue5_native
+
+        monkeypatch.setenv("BIONICS_BRIDGE_URL", "http://127.0.0.1:9999/bridge")
+        monkeypatch.setenv("BIONICS_BRIDGE_TOKEN", "env-token-abc")
+        # Config must NOT be consulted when env fully resolves.
+        monkeypatch.setattr(
+            ue5_native,
+            "_configured_ue5_project_dir",
+            lambda: (_ for _ in ()).throw(AssertionError("config consulted despite env")),
+        )
+
+        url, token = ue5_native._discover_bridge()
+        assert url == "http://127.0.0.1:9999/bridge"
+        assert token == "env-token-abc"
+
+    def test_config_fallback_resolves_token(self, monkeypatch, tmp_path):
+        from bionics_tools import ue5_native
+
+        monkeypatch.delenv("BIONICS_BRIDGE_URL", raising=False)
+        monkeypatch.delenv("BIONICS_BRIDGE_TOKEN", raising=False)
+        # cwd with no .bionics-bridge ancestor → the cwd-walk yields nothing.
+        empty_cwd = tmp_path / "empty_cwd"
+        empty_cwd.mkdir()
+        monkeypatch.chdir(empty_cwd)
+
+        proj = tmp_path / "MyProject"
+        proj.mkdir()
+        self._write_instance(proj, "http://127.0.0.1:8090/bridge", "live-token-xyz")
+        monkeypatch.setattr(ue5_native, "_configured_ue5_project_dir", lambda: str(proj))
+
+        url, token = ue5_native._discover_bridge()
+        assert url == "http://127.0.0.1:8090/bridge"
+        assert token == "live-token-xyz"
+
+    def test_config_fallback_does_not_override_env_url(self, monkeypatch, tmp_path):
+        """Partial env (url only) keeps the env url but fills the token from config."""
+        from bionics_tools import ue5_native
+
+        monkeypatch.setenv("BIONICS_BRIDGE_URL", "http://127.0.0.1:7777/bridge")
+        monkeypatch.delenv("BIONICS_BRIDGE_TOKEN", raising=False)
+        empty_cwd = tmp_path / "empty_cwd"
+        empty_cwd.mkdir()
+        monkeypatch.chdir(empty_cwd)
+
+        proj = tmp_path / "MyProject"
+        proj.mkdir()
+        self._write_instance(proj, "http://127.0.0.1:8090/bridge", "cfg-token")
+        monkeypatch.setattr(ue5_native, "_configured_ue5_project_dir", lambda: str(proj))
+
+        url, token = ue5_native._discover_bridge()
+        assert url == "http://127.0.0.1:7777/bridge"  # env url preserved
+        assert token == "cfg-token"  # token filled from config
+
+    def test_config_fallback_missing_file_returns_default(self, monkeypatch, tmp_path):
+        from bionics_tools import ue5_native
+
+        monkeypatch.delenv("BIONICS_BRIDGE_URL", raising=False)
+        monkeypatch.delenv("BIONICS_BRIDGE_TOKEN", raising=False)
+        empty_cwd = tmp_path / "empty_cwd"
+        empty_cwd.mkdir()
+        monkeypatch.chdir(empty_cwd)
+
+        proj = tmp_path / "MyProject"  # exists but no .bionics-bridge/instance.json
+        proj.mkdir()
+        monkeypatch.setattr(ue5_native, "_configured_ue5_project_dir", lambda: str(proj))
+
+        url, token = ue5_native._discover_bridge()
+        assert url == ue5_native.DEFAULT_BRIDGE_URL
+        assert token == ""
+
+    def test_no_config_no_env_returns_default(self, monkeypatch, tmp_path):
+        from bionics_tools import ue5_native
+
+        monkeypatch.delenv("BIONICS_BRIDGE_URL", raising=False)
+        monkeypatch.delenv("BIONICS_BRIDGE_TOKEN", raising=False)
+        empty_cwd = tmp_path / "empty_cwd"
+        empty_cwd.mkdir()
+        monkeypatch.chdir(empty_cwd)
+        monkeypatch.setattr(ue5_native, "_configured_ue5_project_dir", lambda: "")
+
+        url, token = ue5_native._discover_bridge()
+        assert url == ue5_native.DEFAULT_BRIDGE_URL
+        assert token == ""
+
+    def test_configured_ue5_project_dir_reads_real_config(self):
+        from bionics_tools import ue5_native
+
+        proj = ue5_native._configured_ue5_project_dir()
+        assert proj, "paths.ue5_project should be set in config.yaml"
+        assert "MyProject" in proj

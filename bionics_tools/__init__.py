@@ -53,6 +53,7 @@ def register_all() -> int:
         ue5_animlayer,  # noqa: F401 — Linked Anim Layer create (Bible Step 2)
         ue5_asset,  # noqa: F401
         ue5_audio,  # noqa: F401 — SoundWave import + attenuation
+        ue5_autorig,  # noqa: F401 — fail-closed bone-validate + IKRig (:8090)
         ue5_blueprint,  # noqa: F401
         ue5_controlrig,  # noqa: F401 — Control Rig (Bible Step 6)
         ue5_editor,  # noqa: F401
@@ -61,6 +62,7 @@ def register_all() -> int:
         ue5_niagara,  # noqa: F401 — VFX spawn + param bind
         ue5_rigging,  # noqa: F401 — IK Rig + IK Retargeter (Bible Step 3)
         ue5_runtime,  # noqa: F401
+        ue5_uasvc,  # noqa: F401 — UE5 Asset Service: native skeletal import (:8090)
         watch_mode,  # noqa: F401
     )
 
@@ -86,6 +88,7 @@ def register_ue5_only() -> int:
         ue5_animlayer,  # noqa: F401 — Linked Anim Layer
         ue5_asset,  # noqa: F401
         ue5_audio,  # noqa: F401 — Audio import
+        ue5_autorig,  # noqa: F401 — fail-closed bone-validate + IKRig (:8090)
         ue5_blueprint,  # noqa: F401
         ue5_controlrig,  # noqa: F401 — Control Rig
         ue5_editor,  # noqa: F401
@@ -94,5 +97,6 @@ def register_ue5_only() -> int:
         ue5_niagara,  # noqa: F401 — Niagara VFX
         ue5_rigging,  # noqa: F401 — IK Rig + IK Retargeter
         ue5_runtime,  # noqa: F401
+        ue5_uasvc,  # noqa: F401 — UE5 Asset Service: native skeletal import (:8090)
     )
     return get_registry().count()

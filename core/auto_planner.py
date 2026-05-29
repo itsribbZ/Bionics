@@ -102,6 +102,7 @@ Given a user's request and research context, generate a Bionics execution plan i
 2. **ue5_api**: Use the UE5 Remote Control HTTP API for property get/set
 3. **vision**: Use screen vision + mouse/keyboard for UI interactions that can't be scripted
 4. **existing_script**: Run one of the user's existing Python tools in Content/Python/
+5. **bionics_tool**: Invoke a registered Bionics tool by name (set `bionics_tool` + `bionics_args`). PREFERRED for any task a proven tool already covers — these are fail-closed and live-verified, so never hand-write a script when a tool exists (see PREFERRED NATIVE BIONICS TOOLS in the research context)
 
 ## Output Format
 Return ONLY valid JSON:
@@ -114,9 +115,11 @@ Return ONLY valid JSON:
             "index": 1,
             "description": "Human-readable description",
             "detailed_instructions": "Exact instructions for Bionics to follow",
-            "execution_method": "ue5_python|ue5_api|vision|existing_script",
+            "execution_method": "ue5_python|ue5_api|vision|existing_script|bionics_tool",
             "script_content": "Python code to execute (for ue5_python method)",
             "existing_script": "filename.py (for existing_script method)",
+            "bionics_tool": "registered tool name (for bionics_tool method, e.g. ue5_uasvc_import_skeletal)",
+            "bionics_args": {"arg_name": "value (for bionics_tool method)"},
             "verification": "How to verify this step succeeded",
             "is_destructive": false,
             "requires_app": "Unreal Engine 5",
@@ -137,6 +140,7 @@ Return ONLY valid JSON:
 5. Include rollback strategy
 6. Break complex operations into atomic steps
 7. Reference specific file paths, class names, and property names from the research context
+8. For skeletal-mesh import use the `bionics_tool` ue5_uasvc_import_skeletal; for validating + rigging a humanoid use ue5_autorig_humanoid; for runtime-correct AnimGraph pin driving use ue5_drive_animgraph_pin_via_variable — these are fail-closed and live-proven, so do NOT hand-roll equivalent ue5_python scripts
 """
 
 
@@ -160,6 +164,17 @@ DIVINE_KNOWLEDGE_MAP = {
     "quest":       ("14_Quest_Narrative", ["quest", "narrative", "story", "dialogue", "mission"]),
     "bugs":        ("15_Common_Bugs_Roadblocks", ["bug", "fix", "broken", "crash", "T-pose", "error"]),
 }
+
+
+# Curated native-tool capabilities surfaced to the planner so it emits `bionics_tool`
+# steps instead of hand-rolling fragile scripts. Each wraps a live-proven, fail-closed flow
+# (2026-05-28 skeletal pipeline). Keep names in sync with bionics_tools/ue5_uasvc.py +
+# ue5_autorig.py + ue5_animgraph.py.
+PREFERRED_NATIVE_TOOLS = """PREFERRED NATIVE BIONICS TOOLS (emit execution_method="bionics_tool" with bionics_tool=<name> + bionics_args; do NOT hand-write equivalent scripts):
+  - ue5_uasvc_import_skeletal(file_path, asset_name, dest_path="/Game/Test/Skel"): import a .glb/.gltf/.fbx into a SkeletalMesh+Skeleton+PhysicsAsset. Fail-closed — errors if the source lands as a StaticMesh (skin not detected). Use for ANY skeletal mesh import.
+  - ue5_uasvc_preflight(): static check that the project's Interchange FBX flag allows skeletal FBX import. Run before importing an .fbx.
+  - ue5_autorig_humanoid(skeletal_mesh_path, ikrig_name="", ikrig_dest="/Game/Test/Skel"): validate a mesh as humanoid (23 Mannequin core bones) then build a 9-chain IKRig. Fail-closed — refuses a non-humanoid mesh. Use for humanoid rigging.
+  - ue5_drive_animgraph_pin_via_variable(asset_path, variable_name, target_node_name, target_pin_name): runtime-correct AnimGraph pin driving (spawn+wire+compile). PREFER over bind_pin_to_property."""
 
 
 class AutoPlanner:
@@ -601,6 +616,10 @@ class AutoPlanner:
             tool_list = "\n".join(f"  - {name}: {desc}" for name, desc in sorted(self._tool_index.items()))
             context_parts.append(f"EXISTING PYTHON TOOLS ({len(self._tool_index)} scripts in Content/Python/):\n{tool_list}")
 
+        # Native-first Bionics tools — steer the planner to fail-closed, proven flows
+        # (prefer these over hand-written scripts; dispatched via execution_method="bionics_tool")
+        context_parts.append(PREFERRED_NATIVE_TOOLS)
+
         # Local search results
         if local_results["scripts"]:
             scripts_text = ""
@@ -750,6 +769,55 @@ class AutoPlanner:
             note=step_result.get("note"),
         )
 
+    def _invoke_bionics_tool(self, tool_name: str, args: dict) -> dict:
+        """Dispatch a registered @bionics_tool by name; normalize its ToolResult.
+
+        Lets a plan call native-first tools (ue5_uasvc_import_skeletal,
+        ue5_autorig_humanoid, ue5_drive_animgraph_pin_via_variable, ...) directly
+        instead of hand-rolling scripts. Mirrors the non-gated execution model of the
+        ue5_python path — plan execution is trusted, and a tool call is less dangerous
+        than the arbitrary Python that path already runs. Returns the standard
+        step-result shape {success, output, error, data}.
+        """
+        try:
+            from core.bridge import get_registry
+
+            spec = get_registry().get(tool_name)
+            if spec is None:
+                # Registry may not be populated yet (e.g. CLI entry) — populate once, retry.
+                # Guard: a register_all() failure must not mask the clean "unknown tool" result.
+                try:
+                    from bionics_tools import register_all
+
+                    register_all()
+                except Exception:
+                    pass
+                spec = get_registry().get(tool_name)
+            if spec is None:
+                return {"success": False, "error": f"Unknown bionics tool: {tool_name}"}
+            fn = getattr(spec, "fn", None)
+            if fn is None or not callable(fn):
+                return {"success": False, "error": f"Tool {tool_name} has no callable fn"}
+            result = fn(**(args or {}))
+            # Coroutine guard — registry tools may be async; resolve before reading fields.
+            import inspect as _inspect
+
+            if _inspect.iscoroutine(result):
+                import asyncio as _asyncio
+
+                result = _asyncio.run(result)
+            ok = getattr(result, "ok", None)
+            return {
+                "success": bool(ok) if ok is not None else None,
+                "output": (getattr(result, "content", "") or "")[:500],
+                "error": getattr(result, "error", "") or "",
+                "data": getattr(result, "data", None),
+            }
+        except TypeError as e:
+            return {"success": False, "error": f"bionics_tool {tool_name} arg mismatch: {e}"}
+        except Exception as e:  # noqa: BLE001 — surface any tool failure as a step error
+            return {"success": False, "error": f"bionics_tool {tool_name} raised: {e}"}
+
     def _execute_plan_steps(self, plan: dict, bridge, run_id: str | None = None) -> list[dict]:
         """Execute Python/script steps from a plan via UE5 bridge.
 
@@ -881,6 +949,19 @@ class AutoPlanner:
                     "script": script_name,
                     "error": exec_result.error if not exec_result.success else "",
                 })
+                self._emit_step_event(run_id, idx, method, description,
+                                       _step_script, _step_start, results[-1])
+
+            elif method == "bionics_tool" and step.get("bionics_tool"):
+                tool_name = step["bionics_tool"]
+                tool_args = step.get("bionics_args", {}) or {}
+                self._log(f"Step {idx}: Invoking native tool {tool_name}...")
+                tool_res = self._invoke_bionics_tool(tool_name, tool_args)
+                self._log(
+                    f"Step {idx}: {'OK' if tool_res.get('success') else 'FAIL'} - "
+                    f"{str(tool_res.get('output') or tool_res.get('error'))[:200]}"
+                )
+                results.append({"step": idx, **tool_res})
                 self._emit_step_event(run_id, idx, method, description,
                                        _step_script, _step_start, results[-1])
 

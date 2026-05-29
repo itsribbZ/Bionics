@@ -2,6 +2,31 @@
 
 All notable changes to Bionics will be listed here. Semver: MAJOR.MINOR.PATCH.
 
+## [0.8.0] — 2026-05-29 (Fork A — Skeletal Pipeline Native Tools + Planner bionics_tool Execution, Live-Verified)
+
+MINOR bump: new native-first tool surface + a new planner execution method. Productionizes the 2026-05-28 live-proven `.glb → SkeletalMesh → bone-validate → IKRig` pipeline into fail-closed Bionics tools and makes them reachable from the NL planner. All increments live-verified end-to-end against UE5 5.7 + the BionicsBridge `:8090` rail on 2026-05-29.
+
+### Added — native tool surface (+3 tools, 194 → 197)
+- `ue5_uasvc_import_skeletal(file_path, asset_name, dest_path)` — import `.glb/.gltf/.fbx` into a SkeletalMesh+Skeleton+PhysicsAsset over `:8090`. **Fail-closed**: errors if the source lands as a StaticMesh (skin not detected). Ported verbatim from the proven `_ue5_import_skeletal_via_bionics.py` seed.
+- `ue5_uasvc_preflight()` — static check that the project's Interchange FBX flag allows skeletal FBX import (mirrors `mvp_doctor.check_interchange_fbx_flag`).
+- `ue5_autorig_humanoid(skeletal_mesh_path, ikrig_name, ikrig_dest)` — validate 23 Mannequin core bones (UE5.7 `SkeletalMeshComponent` bone enumerator) then build a 9-chain IKRig. **Fail-closed** both ways: refuses a non-humanoid mesh, re-queries IKRig chains to verify.
+
+### Added — planner reachability
+- New `bionics_tool` execution method in `core/auto_planner.py`: divine_powers can now EMIT and EXECUTE plan steps that call registered native tools (`execution_method="bionics_tool"` + `bionics_tool` + `bionics_args`), dispatched via `_invoke_bionics_tool`. Closes the "registered but unreachable from the planner" gap. A `PREFERRED_NATIVE_TOOLS` context block steers the planner toward these fail-closed flows instead of hand-rolled scripts.
+- `_discover_bridge` config fallback (`bionics_tools/ue5_native.py`): native `:8090` tools resolve MyProject's bridge token from `config.yaml paths.ue5_project` when invoked from the MCP-server cwd (the documented 401 workaround). Env + cwd-walk keep priority, so this can't regress existing resolution.
+
+### Tests (+47, 473 → 520 GREEN)
+- `test_ue5_uasvc` (+20), `test_ue5_autorig` (+13), `test_planner_native_tool_wiring` (+8), `test_ue5_native` `_discover_bridge` (+6). All additive; full suite 520/520 (Py 3.12.10).
+
+### Verified — live-fire receipts (2026-05-29, UE5 5.7 + BionicsBridge :8090)
+- **uasvc positive**: `SK_SW_HumanoidTemplate.glb` → `is_skeletal=True`; Mesh+Skeleton+PhysicsAsset landed in `/Game/Test/Skel/`.
+- **autorig positive**: `humanoid=True`, 23 bones (SkeletalMeshComponent method), **9/9** IKRig chains (verified 18).
+- **divine_powers `--prompt-key rig`**: `executed=True, bridge_status=connected`; step 1 emitted `execution_method="bionics_tool"` → ran `ue5_autorig_humanoid` over `:8090` → `success=true`. The planner-wiring path is proven end-to-end.
+- **Negatives (Formahger sword)**: uasvc no-crash (source carries skin → lands skeletal); autorig **FAIL-CLOSED** — refused, 22/23 Mannequin bones missing, `ikrig_path=None`, no rig built.
+
+### Known / Next
+- divine_powers' `ue5_python`/`existing_script` plan steps still route through `bridge.execute_python`'s RC-HTTP fallback, which is dead in UE5.7 (`Object Default__PythonScriptLibrary cannot be accessed remotely`). Surfaced by the live-fire when the planner auto-appended an `animbp_doctor.py` Doctor-fix step (steps 2–3 failed; the v0.7.5 silent-failure backstop caught it honestly rather than false-passing). Next: extend T1.A native-first routing to the planner's Python-exec steps so they use the `:8090` bridge.
+
 ## [0.7.7] — 2026-05-03 (Lint Sweep + Patch-Hint Variant Coverage)
 
 PATCH bundle wrapping the v0.7.5/v0.7.6 live-fire validation cycle. Two parallel changes — (1) ruff `--fix` cleanup of 334 lint findings across the legacy modules, (2) extending v0.7.5's C++ patch-hint detection to catch the `[C++ EDIT]` prefix variant the live-fire surfaced.

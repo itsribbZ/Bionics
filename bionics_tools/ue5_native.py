@@ -36,6 +36,26 @@ def _next_id() -> int:
     return next(_request_id_counter)
 
 
+def _configured_ue5_project_dir() -> str:
+    """Best-effort read of paths.ue5_project from config.yaml ('' if unavailable).
+
+    The BionicsBridge plugin writes its token under <ue5_project>/.bionics-bridge/,
+    which the cwd-walk in _discover_bridge can't reach when cwd is the Bionics repo
+    (the MCP server's working directory). This lets native :8090 tools resolve the
+    live token from the configured project as a fallback. Read-only; never raises.
+    """
+    try:
+        import yaml
+        config_path = Path(__file__).parent.parent / "config.yaml"
+        if not config_path.exists():
+            return ""
+        with open(config_path, encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+        return str((cfg.get("paths") or {}).get("ue5_project") or "").strip()
+    except Exception:
+        return ""
+
+
 def _discover_bridge() -> tuple[str, str]:
     """Find the BionicsBridge (url, token) via env vars or discovery file.
 
@@ -67,6 +87,25 @@ def _discover_bridge() -> tuple[str, str]:
                     return url, token
             except Exception as _e:
                 pass  # config read failed, fall through to default
+
+    # Config fallback: the bridge token lives under <ue5_project>/.bionics-bridge/,
+    # but the MCP server runs with cwd=Bionics repo, so the cwd-walk above never
+    # reaches MyProject's token and native :8090 calls 401 (documented workaround).
+    # Consult config.yaml's paths.ue5_project as a last resort before the
+    # auth-disabled default. Env vars + the cwd-walk still take priority.
+    if not (url and token):
+        proj_dir = _configured_ue5_project_dir()
+        if proj_dir:
+            candidate = Path(proj_dir) / ".bionics-bridge" / "instance.json"
+            if candidate.exists():
+                try:
+                    data = json.loads(candidate.read_text(encoding="utf-8"))
+                    if not url:
+                        url = data.get("url") or ""
+                    if not token:
+                        token = data.get("token") or ""
+                except Exception:
+                    pass  # config-project read failed, fall through to default
     return (url or DEFAULT_BRIDGE_URL), token
 
 
