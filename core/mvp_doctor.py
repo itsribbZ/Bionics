@@ -884,6 +884,35 @@ except Exception as e:
 
         return findings
 
+    def _run_python_capture(self, script: str, timeout_s: float = 60.0) -> tuple[bool, str, str]:
+        """Run a capture script in UE5 and return (success, output_text, error).
+
+        Native :8090 FIRST — the only path that works in UE5.7 (the RC HTTP
+        PythonScriptLibrary call is blocked, RC multicast discovery is dead). Falls back to
+        the RC bridge.execute_python ONLY when the native bridge is unreachable, so a setup
+        without the BionicsBridge plugin behaves exactly as before. output_text is the
+        captured stdout (native) or the joined RC output lines, so callers can scrape it for
+        the doctor's JSON summary. Mirrors AutoPlanner._execute_python_step (extract a shared
+        native-first executor on the third use).
+        """
+        try:
+            from bionics_tools._ue5_native_exec import run_python_native
+            from bionics_tools.ue5_native import call_bridge_tool
+            native = run_python_native(script, timeout_s, invoke=call_bridge_tool)
+        except Exception as e:  # noqa: BLE001 — any native-path failure falls back to RC
+            native = {"reachable": False, "error": f"native exec path unavailable: {e}"}
+
+        if native.get("reachable"):
+            ok = bool(native.get("success"))
+            return ok, (native.get("output") or "").strip(), ("" if ok else (native.get("error") or ""))
+
+        # Fallback: RC bridge.execute_python.
+        result = self._bridge.execute_python(script)
+        output_text = "\n".join(
+            ln.get("output", "") for ln in (result.data or {}).get("output", [])
+        ).strip()
+        return bool(result.success), output_text, ("" if result.success else (result.error or ""))
+
     @check("AnimBP Doctor (Live)", Category.ANIMATION)
     def check_animbp(self) -> list[Finding]:
         """Run the AnimBP Doctor script inside UE5 and parse its output into Findings.
@@ -920,8 +949,9 @@ except Exception as e:
             return findings
 
         # Run the AnimBP doctor with output capture
-        self._log("Running AnimBP Doctor inside UE5...")
+        self._log("Running AnimBP Doctor inside UE5 (native :8090 first)...")
         capture_script = f'''
+import unreal
 import json
 _bionics_lines = []
 _bionics_orig_log = unreal.log
@@ -960,12 +990,14 @@ _summary = {{
 }}
 print(json.dumps(_summary))
 '''
-        result = self._bridge.execute_python(capture_script)
+        # Native :8090 FIRST (the path that works in UE5.7 — the RC HTTP PythonScriptLibrary
+        # call is blocked), RC fallback only when the native bridge is unreachable.
+        success, output_text, exec_err = self._run_python_capture(capture_script)
 
-        if not result.success:
+        if not success:
             findings.append(Finding(
                 id="ANIMBP_DOCTOR_EXEC_FAIL",
-                title=f"AnimBP Doctor execution failed: {result.error}",
+                title=f"AnimBP Doctor execution failed: {exec_err}",
                 description="Could not run animbp_doctor.py inside UE5.",
                 severity=Severity.HIGH,
                 category=Category.ANIMATION,
@@ -973,30 +1005,20 @@ print(json.dumps(_summary))
             ))
             return findings
 
-        # Parse the JSON summary from output
+        # Parse the JSON summary from output (last line should be print(json.dumps(...))).
         try:
-            output_lines = result.data.get("output", [])
-            output_text = "\n".join(
-                l.get("output", "") for l in output_lines
-            ).strip()
-
-            # Find the JSON blob (last line should be the print(json.dumps(...)))
             summary = None
             for line in reversed(output_text.split("\n")):
                 line = line.strip()
                 if line.startswith("{"):
                     summary = json.loads(line)
                     break
-
             if summary is None:
-                # Fallback: parse raw output for tags
+                # Fallback: parse raw output for tags.
                 summary = self._parse_animbp_raw_output(output_text)
-
         except (json.JSONDecodeError, KeyError) as e:
             self._log(f"AnimBP Doctor output parse error: {e}")
-            summary = self._parse_animbp_raw_output(
-                "\n".join(l.get("output", "") for l in result.data.get("output", []))
-            )
+            summary = self._parse_animbp_raw_output(output_text)
 
         # Convert summary into Findings
         for fail_msg in summary.get("fail", []):

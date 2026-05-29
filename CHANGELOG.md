@@ -2,6 +2,23 @@
 
 All notable changes to Bionics will be listed here. Semver: MAJOR.MINOR.PATCH.
 
+## [0.8.2] — 2026-05-29 (MVP Doctor diagnose-time AnimBP execution goes native :8090)
+
+PATCH bump: extends the v0.8.1 native-first routing to the MVP Doctor's own in-engine execution. Live-verified against UE5 5.7 + BionicsBridge :8090.
+
+### Fixed — the AnimBP Doctor now actually runs in-engine (UE5.7)
+- `core/mvp_doctor.py` `check_animbp()` ran its 8-phase `animbp_doctor.py` capture script via `self._bridge.execute_python` (RC), which is blocked in UE5.7 — so EVERY divine_powers diagnose produced a single `[HIGH] Could not run animbp_doctor.py inside UE5` finding and the doctor never actually ran. New `_run_python_capture(script)` runs native `:8090` FIRST (via `run_python_native`), falling back to RC only when the native bridge is unreachable. Also prepends `import unreal` to the capture script (it runs in `run_python_native`'s fresh exec globals; harmless on the RC fallback).
+- **Receipt**: divine_powers `--prompt-key rig` diagnosis went from `1 finding [HIGH] Could not run...` → **4 real findings** from the doctor's actual 8-phase run, including an in-engine **auto-fix** ("Rebuilt 11 blend space samples"). The `[HIGH]` exec-fail is gone.
+
+### Tests (+3, 527 → 530 GREEN)
+- `tests/test_mvp_doctor.py`: `_run_python_capture` native short-circuit (RC untouched), RC fallback when native unreachable, and real-native-failure-no-RC-retry. Mirrors the planner's TestNativeFirstPythonStep.
+
+### Known / Next (surfaced by the now-working native execution — observability win, not regressions)
+- `validate_anim_pipeline.py`: `AttributeError: 'Class' has no get_super_class` (UE5.7 API drift) — was hidden behind RC-400, now runs and raises.
+- `verify_in_pie.py`: `NameError: __file__ not defined` — `run_python_native`'s exec wrapper doesn't inject `__file__` for `existing_script` steps that reference it.
+- Planner targets `/Game/Variant_Combat/Animation/ABP_SW_Combat_RT` for pin-drive, which "is not an Animation Blueprint" — asset path/selection.
+- `mvp_doctor.check_ue5_health` still uses `self._bridge.execute_python` (RC) — same native-first treatment applies there next (and a shared native-first executor is the rule-of-three extraction: planner + doctor = 2 uses).
+
 ## [0.8.1] — 2026-05-29 (Native-First Planner Python Execution + Rule-of-Three Transport Extraction)
 
 PATCH bump: a bug fix for the finding the v0.8.0 live-fire surfaced, plus the rule-of-three extraction it required. Live-verified end-to-end against UE5 5.7 + BionicsBridge :8090 on 2026-05-29.

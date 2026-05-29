@@ -235,6 +235,57 @@ def test_asset_category_now_has_checks(tmp_path):
     print("  asset_has_checks: PASS")
 
 
+def test_run_python_capture_native_first():
+    """v0.8.2: _run_python_capture runs native :8090 first; RC bridge.execute_python untouched."""
+    from unittest.mock import MagicMock, patch
+    doctor = MVPDoctor(ue5_project_path=".")
+    bridge = MagicMock()
+    doctor._bridge = bridge
+    with patch("bionics_tools._ue5_native_exec.run_python_native",
+               return_value={"reachable": True, "success": True,
+                             "output": '  {"verdict": "READY"}  ', "error": ""}):
+        success, output, error = doctor._run_python_capture("print('x')")
+    assert success is True
+    assert output == '{"verdict": "READY"}'  # stripped
+    assert error == ""
+    bridge.execute_python.assert_not_called()
+    print("  run_python_capture_native_first: PASS")
+
+
+def test_run_python_capture_falls_back_to_rc():
+    """When the native bridge is unreachable, _run_python_capture falls back to RC."""
+    from unittest.mock import MagicMock, patch
+    doctor = MVPDoctor(ue5_project_path=".")
+    bridge = MagicMock()
+    bridge.execute_python.return_value = MagicMock(
+        success=True, error="", data={"output": [{"output": '{"verdict": "READY"}'}]}
+    )
+    doctor._bridge = bridge
+    with patch("bionics_tools._ue5_native_exec.run_python_native",
+               return_value={"reachable": False, "error": "bridge off"}):
+        success, output, _error = doctor._run_python_capture("print('x')")
+    assert success is True
+    assert output == '{"verdict": "READY"}'
+    bridge.execute_python.assert_called_once()
+    print("  run_python_capture_falls_back_to_rc: PASS")
+
+
+def test_run_python_capture_native_failure_no_rc_retry():
+    """A real native failure (script ran + raised) must NOT fall back to the dead RC path."""
+    from unittest.mock import MagicMock, patch
+    doctor = MVPDoctor(ue5_project_path=".")
+    bridge = MagicMock()
+    doctor._bridge = bridge
+    with patch("bionics_tools._ue5_native_exec.run_python_native",
+               return_value={"reachable": True, "success": False,
+                             "output": "", "error": "RuntimeError: boom"}):
+        success, _output, error = doctor._run_python_capture("raise RuntimeError('boom')")
+    assert success is False
+    assert "RuntimeError" in error
+    bridge.execute_python.assert_not_called()
+    print("  run_python_capture_native_failure_no_rc_retry: PASS")
+
+
 if __name__ == "__main__":
     print("MVP Doctor Tests:")
     test_diagnosis_data_model()
@@ -245,6 +296,9 @@ if __name__ == "__main__":
     test_diagnose_failclosed_unregistered_category()
     test_diagnose_failclosed_string_category()
     test_diagnose_runall_not_flagged()
+    test_run_python_capture_native_first()
+    test_run_python_capture_falls_back_to_rc()
+    test_run_python_capture_native_failure_no_rc_retry()
     import tempfile
     with tempfile.TemporaryDirectory() as _td:
         _tp = Path(_td)
