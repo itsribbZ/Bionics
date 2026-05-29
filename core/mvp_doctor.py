@@ -220,6 +220,26 @@ def check(name: str, category: Category):
     return decorator
 
 
+def _coerce_category(value) -> "Category | None":
+    """Resolve a Category from an enum, its name ('ASSET'), or its value ('asset').
+
+    Returns None for anything unrecognized so diagnose() can fail-closed on it
+    instead of silently skipping every check — a bare string never matches a
+    registered Category and would otherwise read as a vacuous pass.
+    """
+    if isinstance(value, Category):
+        return value
+    s = str(value).strip()
+    try:
+        return Category[s.upper()]
+    except KeyError:
+        pass
+    try:
+        return Category(s.lower())
+    except ValueError:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # MVP Doctor
 # ---------------------------------------------------------------------------
@@ -1043,19 +1063,50 @@ print(json.dumps(_summary))
     # Main entry point
     # ------------------------------------------------------------------
 
-    def diagnose(self, categories: list[Category] | None = None) -> Diagnosis:
+    def diagnose(self, categories: "list | None" = None) -> Diagnosis:
         """Run all diagnostic checks and return structured results.
 
         Args:
-            categories: If provided, only run checks in these categories.
-                        If None, run all checks.
+            categories: If provided, only run checks in these categories (Category
+                        enums, or their names/values as strings). If None/empty,
+                        run all checks.
+
+        Fail-closed contract (P0): a targeted diagnose() that runs ZERO checks — or
+        is handed an unknown category — emits a CRITICAL finding instead of
+        returning an empty result. An empty findings list makes is_demo_ready
+        vacuously True, which would hand any pipeline gate (e.g. the skeletal-asset
+        unlock) a green light from zero validation. Never silently pass nothing.
         """
         self._log("MVP Doctor: Starting diagnosis...")
         self._file_cache.clear()
         diagnosis = Diagnosis()
 
+        # Resolve requested categories; surface unknown ones as CRITICAL.
+        # `if categories:` (truthy) preserves the original "None or [] => run all".
+        resolved: list[Category] | None = None
+        if categories:
+            resolved = []
+            for c in categories:
+                cat_enum = _coerce_category(c)
+                if cat_enum is None:
+                    diagnosis.findings.append(Finding(
+                        id=f"UNKNOWN_CATEGORY_{str(c).upper().replace(' ', '_')}",
+                        title=f"Unknown diagnostic category requested: {c!r}",
+                        description=(
+                            f"diagnose() was asked to check {c!r}, which is not a valid "
+                            f"Category. Nothing was inspected for it. Reported CRITICAL "
+                            f"(fail-closed) so an unrecognized request can never read as "
+                            f"'demo ready'."
+                        ),
+                        severity=Severity.CRITICAL,
+                        category=Category.HEALTH_CHECK,
+                        fix_hint=f"Use a valid Category; got {c!r}",
+                    ))
+                else:
+                    resolved.append(cat_enum)
+
         for name, cat, func in _CHECK_REGISTRY:
-            if categories and cat not in categories:
+            if resolved is not None and cat not in resolved:
                 continue
 
             self._log(f"  Check: {name}")
@@ -1075,6 +1126,29 @@ print(json.dumps(_summary))
                     severity=Severity.LOW,
                     category=cat,
                 ))
+
+        # Fail-closed: caller targeted real categories but NOT ONE check ran for
+        # them — a CRITICAL unknown, never a silent pass. (Kills the
+        # diagnose(['ASSET']) vacuous is_demo_ready=True false-pass.) The run-all
+        # path (resolved is None) is never flagged.
+        if resolved and diagnosis.checks_run == 0:
+            labels = ", ".join(sorted(c.value for c in resolved))
+            diagnosis.findings.append(Finding(
+                id="NO_VALIDATOR_FOR_REQUESTED_CATEGORIES",
+                title=f"No validator registered for requested category set: {labels}",
+                description=(
+                    f"diagnose() ran ZERO checks for the requested categories ({labels}); "
+                    f"nothing was inspected. Reported CRITICAL (fail-closed) rather than a "
+                    f"silent pass — an empty check set must never make is_demo_ready vacuously "
+                    f"True. Register at least one @check(...) for the requested category."
+                ),
+                severity=Severity.CRITICAL,
+                category=resolved[0],
+                fix_hint=(
+                    "Register @check decorators for these categories in core/mvp_doctor.py "
+                    f"(e.g. @check('Skeletal Mesh Integrity', Category.{resolved[0].name}))"
+                ),
+            ))
 
         # Sort: CRITICAL first, then HIGH, etc.
         severity_order = {s: i for i, s in enumerate(Severity)}

@@ -200,6 +200,18 @@ except ImportError:
     _FastMCPContext = None  # type: ignore
 
 
+def _mcp_tool_error(message: str) -> Exception:
+    """Build the exception to raise so FastMCP reports an MCP error (isError) rather
+    than emitting structuredContent that would fail a declared outputSchema on a
+    failed call. Prefers fastmcp's ToolError; falls back to RuntimeError (FastMCP
+    surfaces that as isError too)."""
+    try:
+        from fastmcp.exceptions import ToolError
+        return ToolError(message)
+    except Exception:
+        return RuntimeError(message)
+
+
 def _make_mcp_wrapper(tool_name: str):
     """Create an async closure that calls the Bionics tool registry.
 
@@ -229,7 +241,10 @@ def _make_mcp_wrapper(tool_name: str):
             token = set_mcp_context(ctx) if ctx is not None else None
             try:
                 result = await asyncio.to_thread(_gate.execute, tool_name, kwargs)
-                return result.to_dict()
+                _os = spec.output_schema if spec else None
+                if _os is not None and not result.ok:
+                    raise _mcp_tool_error(result.error or f"Tool '{tool_name}' failed")
+                return result.mcp_structured(_os)
             finally:
                 if token is not None:
                     reset_mcp_context(token)
@@ -248,7 +263,10 @@ def _make_mcp_wrapper(tool_name: str):
                     "meta": {"tier": "destructive", "blocked": True},
                 }
             result = await asyncio.to_thread(_gate.execute, tool_name, kwargs)
-            return result.to_dict()
+            _os = spec.output_schema if spec else None
+            if _os is not None and not result.ok:
+                raise _mcp_tool_error(result.error or f"Tool '{tool_name}' failed")
+            return result.mcp_structured(_os)
     _wrapper.__name__ = tool_name
     return _wrapper
 

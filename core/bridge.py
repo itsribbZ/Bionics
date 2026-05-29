@@ -84,6 +84,22 @@ class ToolResult:
     def to_json(self, indent: int = 2) -> str:
         return json.dumps(self.to_dict(), indent=indent, default=str)
 
+    def mcp_structured(self, output_schema: dict | None) -> dict:
+        """Shape this result for an MCP tool return (structuredContent).
+
+        When the tool declares an output_schema — which describes ToolResult.data
+        (see ToolSpec.output_schema) — a SUCCESSFUL result must expose .data as the
+        MCP payload so a spec-compliant client can validate/chain it. Returning the
+        full {ok,content,data,error,meta} envelope here makes the client reject the
+        result ("'<key>' is a required property") because the schema's required keys
+        live under .data, not at the top level. Tools without a schema keep the full
+        envelope (back-compat). Failures keep the envelope too; the MCP wrapper raises
+        on schema'd failures so no schema-mismatched structuredContent is ever emitted.
+        """
+        if output_schema is not None and self.ok:
+            return self.data or {}
+        return self.to_dict()
+
     @classmethod
     def success(cls, content: str = "", data: dict | None = None, **meta) -> ToolResult:
         return cls(ok=True, content=content, data=data, meta=meta or None)

@@ -148,6 +148,48 @@ def test_planner_integration_format():
     print("  planner_format: PASS")
 
 
+def test_diagnose_failclosed_unregistered_category():
+    """P0: diagnose() must NOT report demo_ready on a category with zero checks.
+
+    ASSET has zero @check decorators today. The old code ran 0 checks and returned
+    demo_ready=True (vacuous all() over []), handing the skeletal-asset pipeline gate
+    a green light from no validation. The fail-closed guard turns that into a CRITICAL.
+    """
+    doctor = MVPDoctor(ue5_project_path=".")
+    diag = doctor.diagnose(categories=[Category.ASSET])
+    assert diag.checks_run == 0, "ASSET has no registered checks"
+    assert not diag.is_demo_ready, "empty check set must fail-closed, not vacuously pass"
+    assert any(f.id == "NO_VALIDATOR_FOR_REQUESTED_CATEGORIES" for f in diag.findings)
+    assert diag.critical_count >= 1
+    print("  failclosed_unregistered: PASS")
+
+
+def test_diagnose_failclosed_string_category():
+    """String category names coerce to enums; unknown strings fail-closed."""
+    doctor = MVPDoctor(ue5_project_path=".")
+    # 'ASSET' (string) coerces to Category.ASSET — still zero checks -> fail-closed.
+    diag = doctor.diagnose(categories=["ASSET"])
+    assert not diag.is_demo_ready
+    assert any(f.id == "NO_VALIDATOR_FOR_REQUESTED_CATEGORIES" for f in diag.findings)
+    # Garbage string -> UNKNOWN_CATEGORY critical, never a vacuous pass.
+    diag2 = doctor.diagnose(categories=["frobnicate"])
+    assert not diag2.is_demo_ready
+    assert any(f.id.startswith("UNKNOWN_CATEGORY") for f in diag2.findings)
+    print("  failclosed_string: PASS")
+
+
+def test_diagnose_runall_not_flagged():
+    """diagnose(None) / diagnose([]) run all checks; the guard must NOT fire there."""
+    doctor = MVPDoctor(ue5_project_path=".")
+    for arg in (None, []):
+        diag = doctor.diagnose(categories=arg)
+        assert diag.checks_run > 0, f"run-all should execute checks (arg={arg!r})"
+        assert not any(
+            f.id == "NO_VALIDATOR_FOR_REQUESTED_CATEGORIES" for f in diag.findings
+        ), "run-all path must never be flagged as missing a validator"
+    print("  runall_not_flagged: PASS")
+
+
 if __name__ == "__main__":
     print("MVP Doctor Tests:")
     test_diagnosis_data_model()
@@ -155,4 +197,7 @@ if __name__ == "__main__":
     test_diagnosis_summary_format()
     test_planner_integration_format()
     test_doctor_runs_on_real_project()
+    test_diagnose_failclosed_unregistered_category()
+    test_diagnose_failclosed_string_category()
+    test_diagnose_runall_not_flagged()
     print("\nAll tests passed.")

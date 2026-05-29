@@ -270,3 +270,112 @@ class TestSplicePoseFlow:
 
         assert result.ok is False
         assert "Splice node not found" in result.error
+
+
+# ============================================================================
+# create_animgraph_variable_get + drive_animgraph_pin_via_variable
+# (2026-05-15 campaign — the runtime-correct replacement for bind_pin)
+# ============================================================================
+
+
+class TestRuntimeDrivingToolsRegistration:
+    EXPECTED = (
+        "ue5_create_animgraph_variable_get",
+        "ue5_drive_animgraph_pin_via_variable",
+    )
+
+    def test_registered_under_animgraph_moderate(self):
+        from bionics_tools import ue5_animgraph  # noqa: F401 — import registers
+        from core.bridge import SafetyTier, get_registry
+
+        reg = get_registry()
+        for name in self.EXPECTED:
+            spec = reg.get(name)
+            assert spec is not None, f"{name} not registered — planner can't route to it"
+            assert spec.category == "ue5_animgraph", f"{name} category={spec.category}"
+            assert spec.safety_tier == SafetyTier.MODERATE, f"{name} safety={spec.safety_tier}"
+
+
+class TestCreateAnimGraphVariableGet:
+    def test_calls_bridge_with_defaults(self):
+        from bionics_tools import ue5_animgraph
+
+        with patch(
+            "bionics_tools.ue5_animgraph._call_tool",
+            return_value=_mock_success(data={"ok": True, "node_name": "K2Node_VariableGet_0"}),
+        ) as mock:
+            result = ue5_animgraph.ue5_create_animgraph_variable_get(
+                asset_path="/Game/AnimBP/ABP_Trooper",
+                variable_name="bHasRangedWeapon",
+            )
+
+        assert result.ok is True
+        mock.assert_called_once_with("create_animgraph_variable_get", {
+            "asset_path": "/Game/AnimBP/ABP_Trooper",
+            "variable_name": "bHasRangedWeapon",
+            "pos_x": 0,
+            "pos_y": 0,
+        })
+
+
+class TestDriveAnimGraphPinViaVariable:
+    def test_calls_bridge_with_compile_default_true(self):
+        """The canonical armed-loco fix: drive BlendListByBool.bActiveValue from a var."""
+        from bionics_tools import ue5_animgraph
+
+        with patch(
+            "bionics_tools.ue5_animgraph._call_tool",
+            return_value=_mock_success(data={"ok": True, "verified_linked": True, "compile_ok": True}),
+        ) as mock:
+            result = ue5_animgraph.ue5_drive_animgraph_pin_via_variable(
+                asset_path="/Game/SciFITrooper_Man_03/Blueprints/AnimBP/ABP_SciFiTrooperManV3",
+                variable_name="bHasRangedWeapon",
+                target_node_name="BlendListByBool_0",
+                target_pin_name="bActiveValue",
+            )
+
+        assert result.ok is True
+        assert result.data["verified_linked"] is True
+        mock.assert_called_once_with("drive_animgraph_pin_via_variable", {
+            "asset_path": "/Game/SciFITrooper_Man_03/Blueprints/AnimBP/ABP_SciFiTrooperManV3",
+            "variable_name": "bHasRangedWeapon",
+            "target_node_name": "BlendListByBool_0",
+            "target_pin_name": "bActiveValue",
+            "pos_x": 0,
+            "pos_y": 0,
+            "compile": True,
+        })
+
+    def test_compile_false_defers(self):
+        from bionics_tools import ue5_animgraph
+
+        with patch(
+            "bionics_tools.ue5_animgraph._call_tool",
+            return_value=_mock_success(),
+        ) as mock:
+            ue5_animgraph.ue5_drive_animgraph_pin_via_variable(
+                asset_path="/Game/AnimBP/ABP_X",
+                variable_name="Alpha",
+                target_node_name="Blend_0",
+                target_pin_name="Alpha",
+                compile=False,
+            )
+
+        assert mock.call_args[0][1]["compile"] is False
+
+    def test_returns_bridge_failure_unchanged(self):
+        from bionics_tools import ue5_animgraph
+
+        with patch(
+            "bionics_tools.ue5_animgraph._call_tool",
+            return_value=_mock_failure("Variable 'nope' not found on AnimBP class"),
+        ):
+            result = ue5_animgraph.ue5_drive_animgraph_pin_via_variable(
+                asset_path="/Game/AnimBP/ABP_X",
+                variable_name="nope",
+                target_node_name="N",
+                target_pin_name="P",
+            )
+
+        assert result.ok is False
+        assert "not found on AnimBP class" in result.error

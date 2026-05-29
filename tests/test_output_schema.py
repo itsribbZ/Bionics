@@ -107,3 +107,43 @@ def test_at_least_fifteen_tools_declare_output_schema():
     names = {s.name for s in declared}
     missing = [n for n in SHIPPED_OUTPUT_SCHEMA_TOOLS if n not in names]
     assert not missing, f"Expected tools missing output_schema: {missing}"
+
+
+# -------------------- structuredContent contract (the wrapper bug) --------------------
+#
+# The declared output_schema describes ToolResult.DATA. The MCP wrapper used to return
+# the full {ok,content,data,error,meta} envelope as structuredContent, so a spec-compliant
+# client rejected every schema'd tool ("'version' is a required property"). These tests
+# round-trip a REAL tool return against its schema — the gap that let the bug ship
+# (the tests above only checked schemas were attached, never validated a return).
+
+
+def test_mcp_structured_returns_data_not_envelope_for_schema_success():
+    r = ToolResult.success(content="ok", data={"echo": "x"})
+    schema = {"type": "object", "properties": {"echo": {"type": "string"}}, "required": ["echo"]}
+    payload = r.mcp_structured(schema)
+    assert payload == {"echo": "x"}, "schema'd success must expose .data, not the envelope"
+    assert "ok" not in payload and "meta" not in payload
+
+
+def test_mcp_structured_keeps_envelope_without_schema():
+    r = ToolResult.success(content="ok", data={"echo": "x"})
+    payload = r.mcp_structured(None)
+    assert set(payload) >= {"ok", "content", "data", "error", "meta"}
+
+
+def test_real_query_tool_data_validates_against_its_schema():
+    """Round-trip: version + list_categories return data that validates against the
+    declared output_schema, AND their mcp_structured() payload does too. Before the fix
+    the wrapper emitted the envelope, which fails this validation."""
+    jsonschema = pytest.importorskip("jsonschema")
+    reg = get_registry()
+    for name in ("version", "list_categories"):
+        spec = reg.get(name)
+        assert spec is not None and spec.output_schema is not None
+        result = spec.fn()
+        assert result.ok, f"{name} should succeed (pure tool, no external deps)"
+        jsonschema.validate(instance=result.data, schema=spec.output_schema)
+        jsonschema.validate(instance=result.mcp_structured(spec.output_schema), schema=spec.output_schema)
+        for req in spec.output_schema.get("required", []):
+            assert req in result.mcp_structured(spec.output_schema), f"{name}: '{req}' must be top-level"

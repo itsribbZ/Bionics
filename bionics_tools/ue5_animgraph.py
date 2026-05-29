@@ -301,12 +301,21 @@ def ue5_bind_pin_to_property(
     pin_name: Annotated[str, "Input pin name to bind (e.g. 'bIsCrouched', 'Alpha')"],
     source_variable: Annotated[str, "AnimInstance member variable name"],
 ) -> ToolResult:
-    """Bind an AnimGraph node input pin to a UAnimInstance member variable —
-    the editor "right-click pin → Bind to <variable>" action.
+    """Bind an AnimGraph node input pin to a UAnimInstance member variable via
+    PropertyBindings metadata — the editor "right-click pin -> Bind to <variable>" action.
+
+    WARNING (metadata-only): this writes the PropertyBindings map but does NOT
+    recompile the AnimBP. The runtime FExposedValueHandler subsystem is patched
+    only inside CompileBlueprint, so a bind made here can silently fail to drive at
+    runtime (T-pose / dead-pin). The C++ now verifies the metadata PERSISTED
+    (returns ok=false otherwise) — but persistence is not runtime propagation.
+
+    For any live/runtime pin driving, prefer ue5_drive_animgraph_pin_via_variable
+    (atomic spawn K2Node_VariableGet + wire + compile — runtime-correct). Keep
+    bind_pin only for editor-time/display bindings that get compiled later.
 
     Closes T-BRIDGE-1 hole #2. Verifies the variable exists on the AnimBP class
-    hierarchy before binding (fails clean if missing). Implementation uses
-    UAnimGraphNode_Base::PropertyBindings (PropertyAccess type).
+    hierarchy before binding (fails clean if missing).
     """
     return _call_tool("bind_pin_to_property", {
         "asset_path": asset_path,
@@ -351,6 +360,89 @@ def ue5_splice_pose_flow(
         "splice_node": splice_node,
         "splice_input_pin": splice_input_pin,
         "splice_output_pin": splice_output_pin,
+    })
+
+
+# ============================================================================
+# RUNTIME-CORRECT VARIABLE DRIVING (2026-05-15 campaign — LIMIT 1 & 2)
+# ============================================================================
+
+
+@bionics_tool(
+    name="ue5_create_animgraph_variable_get",
+    category="ue5_animgraph",
+    safety_tier=SafetyTier.MODERATE,
+    read_only=False,
+    strict=True,
+    aliases=["create-animgraph-variable-get", "animgraph-variable-get"],
+    title="Create AnimGraph Variable Get",
+)
+def ue5_create_animgraph_variable_get(
+    asset_path: Annotated[str, "AnimBP path like /Game/Blueprints/ABP_Character"],
+    variable_name: Annotated[str, "AnimInstance member variable to read (must exist on the AnimBP class)"],
+    pos_x: Annotated[int, "Node X position in the graph"] = 0,
+    pos_y: Annotated[int, "Node Y position in the graph"] = 0,
+) -> ToolResult:
+    """Spawn a K2Node_VariableGet inside an AnimBP's AnimGraph (NOT EventGraph).
+
+    Python cannot build a K2Node_VariableGet directly — FMemberReference's fields are
+    protected UPROPERTYs with no UFUNCTION mutators — so this native C++ tool wraps the
+    canonical NewObject -> SetSelfMember -> AddNode -> AllocateDefaultPins pattern.
+    Validates the variable exists on the AnimBP class. Returns the new node name + GUID
+    + output pin name.
+
+    Does NOT wire or compile. For the atomic spawn+wire+compile (the runtime-correct way
+    to drive a pin), use ue5_drive_animgraph_pin_via_variable instead.
+    """
+    return _call_tool("create_animgraph_variable_get", {
+        "asset_path": asset_path,
+        "variable_name": variable_name,
+        "pos_x": pos_x,
+        "pos_y": pos_y,
+    })
+
+
+@bionics_tool(
+    name="ue5_drive_animgraph_pin_via_variable",
+    category="ue5_animgraph",
+    safety_tier=SafetyTier.MODERATE,
+    read_only=False,
+    strict=True,
+    aliases=["drive-animgraph-pin", "drive-pin-via-variable"],
+    title="Drive AnimGraph Pin via Variable",
+)
+def ue5_drive_animgraph_pin_via_variable(
+    asset_path: Annotated[str, "AnimBP path"],
+    variable_name: Annotated[str, "AnimInstance member variable to drive the pin from"],
+    target_node_name: Annotated[str, "GetName() of the anim node to drive (e.g. BlendListByBool_0)"],
+    target_pin_name: Annotated[str, "Input pin on the target node (e.g. 'bActiveValue', 'Alpha')"],
+    pos_x: Annotated[int, "VariableGet node X position"] = 0,
+    pos_y: Annotated[int, "VariableGet node Y position"] = 0,
+    compile: Annotated[bool, "Compile the AnimBP after wiring (default True — required for runtime propagation)"] = True,  # noqa: A002
+) -> ToolResult:
+    """Atomic spawn-wire-compile — the RUNTIME-CORRECT way to drive an AnimGraph pin
+    from an AnimInstance variable.
+
+    Spawns a K2Node_VariableGet for `variable_name`, wires its output to
+    `target_node_name`.`target_pin_name`, then compiles the AnimBP so the runtime
+    FExposedValueHandler subsystem actually picks up the binding.
+
+    PREFER THIS over ue5_bind_pin_to_property for any live/runtime driving.
+    bind_pin_to_property writes PropertyBindings metadata only and does NOT recompile,
+    so the binding never propagates at runtime. Explicit graph wires ARE what the
+    compiler registers as eval handlers — hence this is the correct path.
+
+    The C++ refuses ok=True unless the wire persisted AND (when compiling) the AnimBP
+    compiled clean, so the returned verified_linked / compile_ok are trustworthy.
+    """
+    return _call_tool("drive_animgraph_pin_via_variable", {
+        "asset_path": asset_path,
+        "variable_name": variable_name,
+        "target_node_name": target_node_name,
+        "target_pin_name": target_pin_name,
+        "pos_x": pos_x,
+        "pos_y": pos_y,
+        "compile": compile,
     })
 
 
