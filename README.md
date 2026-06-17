@@ -133,8 +133,8 @@ result = gate.execute("bionics_task_result", {"task_id": task_id}).data
 
 ```bash
 # 1. Clone
-git clone https://github.com/jbro1/bionics.git
-cd bionics
+git clone https://github.com/itsribbZ/Bionics.git
+cd Bionics
 
 # 2. Install in editable mode (exposes `bionics`, `bionics-gui`, `bionics-mcp` CLI commands).
 #    Requires Python 3.12+ (3.14 tested). Optional extras unlock observability and vector memory.
@@ -261,7 +261,7 @@ Under MCP (no GUI), destructive tools require explicitly setting `BIONICS_MCP_AL
 ## Testing
 
 ```bash
-pytest tests/    # 378 tests — core modules, tool registry (locked reads + summary), safety, UE5 rigging, memory, integration, OTel, task manager (DESTRUCTIVE gate + future-snapshot wait + auto-evict + clear tool), session (traversal guard), vector memory, sub-agent fan-out (DESTRUCTIVE gate + async-context-safe sync wrapper), Voyager verification
+pytest tests/    # 500+ tests — core modules, tool registry (locked reads + summary), safety, UE5 rigging, memory, integration, OTel, task manager (DESTRUCTIVE gate + future-snapshot wait + auto-evict + clear tool), session (traversal guard), vector memory, sub-agent fan-out (DESTRUCTIVE gate + async-context-safe sync wrapper), Voyager verification
 ```
 
 ## Status
