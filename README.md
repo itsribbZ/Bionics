@@ -261,7 +261,7 @@ Under MCP (no GUI), destructive tools require explicitly setting `BIONICS_MCP_AL
 ## Testing
 
 ```bash
-pytest tests/    # 500+ tests — core modules, tool registry (locked reads + summary), safety, UE5 rigging, memory, integration, OTel, task manager (DESTRUCTIVE gate + future-snapshot wait + auto-evict + clear tool), session (traversal guard), vector memory, sub-agent fan-out (DESTRUCTIVE gate + async-context-safe sync wrapper), Voyager verification
+pytest tests/    # 400+ tests — core modules, tool registry (locked reads + summary), safety, UE5 rigging, memory, integration, OTel, task manager (DESTRUCTIVE gate + future-snapshot wait + auto-evict + clear tool), session (traversal guard), vector memory, sub-agent fan-out (DESTRUCTIVE gate + async-context-safe sync wrapper), Voyager verification
 ```
 
 ## Status
