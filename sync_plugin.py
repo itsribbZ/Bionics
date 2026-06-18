@@ -150,14 +150,25 @@ def compare_tree(verbose: bool = False) -> dict:
 
 
 def apply_sync(changes: dict, verbose: bool = False) -> int:
-    """Copy missing/changed files from source to target. Returns count copied."""
+    """Copy missing/changed files from source to target. Returns count copied.
+
+    Note: uses shutil.copy (not copy2) and explicitly bumps mtime to now after
+    each write. This is deliberate — UBT's adaptive build skips recompile when
+    .obj mtime > source mtime, and copy2 preserves repo mtimes which can be
+    older than stale .obj files from prior phantom-success builds. Touching
+    after copy guarantees the build sees newly-synced files as fresh.
+    See feedback_sync_plugin_before_rebuild.md for the incident receipts.
+    """
+    import time as _time
     count = 0
     to_copy = changes["missing"] + changes["changed"]
+    now = _time.time()
     for rel in to_copy:
         src = SOURCE_ROOT / rel
         tgt = TARGET_ROOT / rel
         tgt.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, tgt)
+        shutil.copy(src, tgt)
+        os.utime(tgt, (now, now))  # bump mtime past any stale .obj timestamps
         count += 1
         if verbose:
             print(f"  COPIED: {rel}")

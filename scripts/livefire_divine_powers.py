@@ -7,8 +7,12 @@ Hits the real wrapper end-to-end:
 execute=False by default (plan-only — no UE5 mutations). Pass --execute to
 enable the live execution path against the throwaway test BP.
 
-Intentionally targets /Game/Tests/BP_EventGraphSmoke ONLY — never names
-Sworder production assets.
+Targets throwaway TEST assets ONLY (/Game/Tests/BP_EventGraphSmoke for the
+EventGraph prompts; /Game/Test/Skel for the `rig` prompt) — never names
+Sworder production assets. The `rig` prompt exercises the bionics_tool
+execution path: it steers the planner to emit execution_method="bionics_tool"
+(ue5_autorig_humanoid) which dispatches a real :8090 call via _invoke_bionics_tool.
+Run it AFTER scripts/livefire_uasvc.py has landed the SkeletalMesh.
 """
 from __future__ import annotations
 
@@ -33,6 +37,15 @@ SAFE_PROMPTS = {
         "/Game/Tests/BP_EventGraphSmoke that prints "
         "'Bionics divine_powers smoke test'. Wire BeginPlay.then to "
         "PrintString.execute and compile."
+    ),
+    # Exercises the bionics_tool execution path (planner -> _invoke_bionics_tool -> :8090).
+    # Tightly scoped to a single autorig step on the mesh livefire_uasvc.py lands, so it
+    # maps deterministically onto ue5_autorig_humanoid rather than a hand-rolled ue5_python.
+    "rig": (
+        "Validate the skeletal mesh at "
+        "/Game/Test/Skel/SK_SW_HumanoidTemplate/SkeletalMeshes/SK_SW_HumanoidTemplate "
+        "as a humanoid and build an IKRig for it. Use the native Bionics autorig tool "
+        "(ue5_autorig_humanoid) for this — do not hand-write a Python script."
     ),
 }
 

@@ -1,6 +1,6 @@
 # Bionics
 
-**An AI agent that controls Unreal Engine 5 with 187 tools.**
+**An AI agent that controls Unreal Engine 5 with 199 tools.**
 
 > One prompt → AnimGraph wired, Blueprints validated, assets spawned, PIE tested. The animation-pipeline layer no other UE5 AI tool ships.
 
@@ -13,8 +13,8 @@ See **[docs/demos/](docs/demos/)** for the BPDoctor hero GIF (T1.A) and the 4-mi
 
 ## What it does
 
-- **187 tools** across 33 categories — UE5 actors, Blueprints, AnimGraphs, StateTrees, Control Rigs, Niagara, audio, materials, PIE, rigging, retargeting, EventGraph (K2), Linked Anim Layers, async tasks, session progress tracking, divine_powers NL→UE5 entry point
-- **Native C++ bridge (BionicsBridge plugin) @ 5-20ms** — vs. 100-400ms for HTTP-only MCP competitors. See `plugins/BionicsBridge/README.md` for the technical breakdown.
+- **199 tools** across 37 categories — UE5 actors, Blueprints, AnimGraphs, StateTrees, Control Rigs, Niagara, audio, materials, PIE, rigging, retargeting, EventGraph (K2), Linked Anim Layers, async tasks, session progress tracking, divine_powers NL→UE5 entry point
+- **Native C++ bridge (BionicsBridge plugin)** — architecturally expected ~5-20ms (in-process JSON-RPC over loopback HTTP) vs ~100-400ms for Python multicast remote-exec; benchmark pending. See `plugins/BionicsBridge/README.md` for the technical breakdown.
 - **MCP server** (FastMCP 2.11+ / 3.x) — drops straight into Claude Code, Cursor, Windsurf, or any MCP-aware client. Full MCP 2025-11-25 spec: annotations, `outputSchema` on query tools, async Tasks for long-running ops.
 - **BPDoctor** — 34-check static analysis with auto-fix for Blueprint/AnimBP errors (missing MM schema, dead cached poses, unconnected slots, empty state machines, blend-weight sum violations, etc.).
 - **Full AAA animation pipeline** — Motion Matching schema setup, IK Rig + IK Retargeter creation, batch retargeting of N animations, Linked Anim Layer AnimBPs, Control Rig asset creation and AnimBP binding.
@@ -158,7 +158,7 @@ python mcp_server.py           # MCP stdio/HTTP server (for Claude Code etc.)
 python cli.py list             # Command-line tool runner
 ```
 
-**Optional (recommended for UE5 workflows):** build the BionicsBridge C++ plugin into your UE5 project to drop tool-call latency from ~400ms to ~5-20ms. See [`plugins/BionicsBridge/README.md`](plugins/BionicsBridge/README.md).
+**Optional (recommended for UE5 workflows):** build the BionicsBridge C++ plugin into your UE5 project to drop tool-call latency — architecturally expected ~5-20ms (in-process loopback HTTP) vs the ~100-400ms of Python remote-exec; benchmark pending. See [`plugins/BionicsBridge/README.md`](plugins/BionicsBridge/README.md).
 
 ## Requirements
 
@@ -186,7 +186,7 @@ Add Bionics as an MCP server. At your project root (or globally in `~/.claude/.m
 }
 ```
 
-Restart Claude Code. All 187 tools show up as native tool-use.
+Restart Claude Code. All 199 tools show up as native tool-use.
 
 ## Tool categories
 
@@ -222,7 +222,7 @@ Restart Claude Code. All 187 tools show up as native tool-use.
                         ┌──────────────────────────┐
   Claude Code / Cursor  │ MCP (stdio / HTTP)       │
   Windsurf / CLI       ─┤ mcp_server.py            │
-                        │   187 tools registered    │
+                        │   199 tools registered    │
                         └──────────┬───────────────┘
                                    │
                                    ▼
@@ -241,6 +241,8 @@ Restart Claude Code. All 187 tools show up as native tool-use.
 │  divine_powers│    │ :9998 (fallback)     │    │ ~5-20ms native     │
 └───────────────┘    └──────────────────────┘    └────────────────────┘
 ```
+
+> Latency figures above (~400ms RE / ~5-20ms native) are architectural estimates, not measured benchmarks — a benchmark is pending.
 
 ## Pre-built plans
 
@@ -261,12 +263,12 @@ Under MCP (no GUI), destructive tools require explicitly setting `BIONICS_MCP_AL
 ## Testing
 
 ```bash
-pytest tests/    # 400+ tests — core modules, tool registry (locked reads + summary), safety, UE5 rigging, memory, integration, OTel, task manager (DESTRUCTIVE gate + future-snapshot wait + auto-evict + clear tool), session (traversal guard), vector memory, sub-agent fan-out (DESTRUCTIVE gate + async-context-safe sync wrapper), Voyager verification
+pytest tests/    # 580+ tests — core modules, tool registry (locked reads + summary), safety, UE5 rigging, memory, integration, OTel, task manager (DESTRUCTIVE gate + future-snapshot wait + auto-evict + clear tool), session (traversal guard), vector memory, sub-agent fan-out (DESTRUCTIVE gate + async-context-safe sync wrapper), Voyager verification
 ```
 
 ## Status
 
-- **Version**: 0.7.3 — "German-Automobile Audit Sweep" (2026-05-03) — Voyager warm-start cache key fix (one-char `"method"` → `"execution_method"` at `core/auto_planner.py:990`), 2 dead model IDs swept (`core/quiz_engine.py:61` + `plans/auto_wire_animgraph.py:64` → `claude-sonnet-4-6`), 8 stale tool-count surfaces updated (179/178 → 187), CONTRIBUTING test-count corrected (356 → 410). 410/410 pytest green; EventGraph C++ live-verified 8/8; divine_powers MCP entry point exposed (v0.7.0) and live-fired end-to-end (v0.7.2).
+- **Version**: 0.7.3 — "German-Automobile Audit Sweep" (2026-05-03) — Voyager warm-start cache key fix (one-char `"method"` → `"execution_method"` at `core/auto_planner.py:990`), 2 dead model IDs swept (`core/quiz_engine.py:61` + `plans/auto_wire_animgraph.py:64` → `claude-sonnet-4-6`), 8 stale tool-count surfaces updated (179/178 → 192), CONTRIBUTING test-count corrected (356 → 446). 446/446 pytest green; EventGraph C++ live-verified 8/8; divine_powers MCP entry point exposed (v0.7.0) and live-fired end-to-end (v0.7.2).
 - **Stability**: v1.0 hardening in progress (see hellscape audit roadmap)
 - **Active development**
 

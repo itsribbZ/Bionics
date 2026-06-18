@@ -2,6 +2,102 @@
 
 All notable changes to Bionics will be listed here. Semver: MAJOR.MINOR.PATCH.
 
+## [0.8.4] — 2026-05-29 (autorig chain canon → 7, aligned to the game's IKRig_Mannequin/IKRig_SciFiTrooper)
+
+PATCH bump: M5 Stage 1. Live-verified against UE5 5.7 + BionicsBridge `:8090`.
+
+### Fixed — autorig builds the 7-chain Sworder canon (was 9), so retarget auto_map will hit 7/7
+- `bionics_tools/ue5_autorig.py`: live introspection of the project's real rigs (`IKRig_Mannequin` source + `IKRig_SciFiTrooper` target) showed BOTH use the SAME 7-chain set — Root, Spine, Head, LeftArm, RightArm, LeftLeg, RightLeg — with **no Pelvis or Neck chain**. The autorig hardcoded 9; the extra Pelvis+Neck map to nothing on the source and pin those bones to ref-pose, fighting the retarget. Dropped Pelvis+Neck → 7-chain canon matching the game rigs exactly (names align, so `auto_map EXACT` hits 7/7). The gate count is now driven by `len(CHAINS)` (single source of truth), surfaced as `expected_count`; the UE5-side gate + host backstop + live-fire all track it instead of a hardcoded 9. The v0.8.3 idempotency mechanism (clear → re-query-assert-empty → exactly-N-unique + host backstop) is unchanged.
+- **Receipt**: `scripts/livefire_autorig.py --idempotency` over `:8090` — run 1 self-healed the live `IKR_SW_HumanoidTemplate` from 9 chains down to exactly 7; run 2 held at 7/7 unique (cleared 7). The live target rig now matches the source's 7 chains.
+
+### Stage 0 (live verification, banked for the Stage 2 retarget tool)
+- `IKRetargetBatchOperation.duplicate_and_retarget(assets, source_mesh, target_mesh, ik_retarget_asset, search, replace, prefix, suffix, include_referenced_assets, overwrite_existing_files)` signature confirmed live (the existing `ue5_batch_retarget` is dead — fabricated `IKRetargetBatchOperationNameRule`). UE5.7 `IKRetargeterController` is an ops-stack API (`add_default_ops` / `assign_ik_rig_to_all_ops` / `set_ik_rig` / `auto_map_chains` / `get/set_root_settings`). Enums `RetargetSourceOrTarget{SOURCE,TARGET}`, `AutoMapChainType{CLEAR,EXACT,FUZZY}`. Proven `RTG_Mannequin_to_SciFiTrooper` exists; `IKR_`/`IK_` name collision confirmed. (`query_assets`' short-name class filter silently fails for IKRig plugin classes — use AssetRegistry `get_assets_by_class` with `TopLevelAssetPath`.)
+
+### Tests (535 GREEN, count steady)
+- `tests/test_ue5_autorig.py`: 9→7 canon across the host tests; the dup-at-N case now targets `verified=7/unique=6`; the over-count case = 14 (a 2× stack of the 7-canon).
+- `scripts/livefire_autorig.py --idempotency`: now count-agnostic (asserts against the tool's reported `expected_count`).
+
+## [0.8.3] — 2026-05-29 (autorig idempotency — the 27/36-chain dup-pollution retarget blocker eliminated)
+
+PATCH bump: makes `ue5_autorig_humanoid` idempotent. Live-verified against UE5 5.7 + BionicsBridge `:8090` (self-healed a 36-chain polluted rig → 9; a re-run holds at exactly 9).
+
+### Fixed — re-running autorig no longer stacks duplicate IKRig chains (the retarget blocker)
+- `bionics_tools/ue5_autorig.py`: the embedded UE5 validate+rig script loaded a pre-existing IKRig and re-added all 9 retarget chains UNCONDITIONALLY. `IKRigController.add_retarget_chain` APPENDS (no dedup by name), so re-runs stacked 9 → 18 → 27(+) — the wild `IKR_SW_HumanoidTemplate` carried **36** chains. The loose `verified >= 9` gate rubber-stamped it, and the duplicate source/target chain names broke the downstream IK Retargeter. Now: clear all existing chains, **re-query and assert the rig is actually empty before rebuilding** (abort fail-closed if anything survived — gates on the real post-clear residual, never the ambiguous `remove_retarget_chain` bool); the UE5-side gate requires **exactly 9 unique**; and a **host-side backstop** independently rejects any count not in {0,9}, any non-{0,9} unique count, a count≠unique mismatch, or an incomplete clear.
+- **Receipt**: `scripts/livefire_autorig.py --idempotency` over `:8090` — run 1 self-healed 36 → 9, run 2 held at 9/9 unique. A 3-lens adversarial-review workflow (correctness / UE5.7-API / regression) caught 2 MEDIUM holes (partial-clear + empty-re-query false-pass; count-only backstop missing the dup-at-9 case) that pytest + the first-pass live-fire both missed — both folded in.
+
+### Tests (+5, 530 → 535 GREEN)
+- `tests/test_ue5_autorig.py`: clear-count surfaced; host backstop rejects 18 and the dup-at-9 (`verified=9`/`unique=8`) case; rejects an incomplete clear; and correctly allows `verified_count=0` (the legit re-query-failed fallback).
+- `scripts/livefire_autorig.py`: new `--idempotency` mode (Rule #13 front-to-back: run twice, assert it stays exactly 9 / `cleared==9`).
+
+### UE5.7 API (live-introspected against the running editor)
+- `IKRigController`: `add_retarget_chain(name,start,end,goal)->Name` (APPENDS), `remove_retarget_chain(name)->bool`, `get_retarget_chains()->Array[BoneChain]` (each has `.chain_name`).
+
+### Unblocks
+- The M5 idea→playable tail: IK Retargeter → AnimBP wire → PIE spawn → perf gauntlet (the rig is now guaranteed clean).
+
+## [0.8.2] — 2026-05-29 (MVP Doctor diagnose-time AnimBP execution goes native :8090)
+
+PATCH bump: extends the v0.8.1 native-first routing to the MVP Doctor's own in-engine execution. Live-verified against UE5 5.7 + BionicsBridge :8090.
+
+### Fixed — the AnimBP Doctor now actually runs in-engine (UE5.7)
+- `core/mvp_doctor.py` `check_animbp()` ran its 8-phase `animbp_doctor.py` capture script via `self._bridge.execute_python` (RC), which is blocked in UE5.7 — so EVERY divine_powers diagnose produced a single `[HIGH] Could not run animbp_doctor.py inside UE5` finding and the doctor never actually ran. New `_run_python_capture(script)` runs native `:8090` FIRST (via `run_python_native`), falling back to RC only when the native bridge is unreachable. Also prepends `import unreal` to the capture script (it runs in `run_python_native`'s fresh exec globals; harmless on the RC fallback).
+- **Receipt**: divine_powers `--prompt-key rig` diagnosis went from `1 finding [HIGH] Could not run...` → **4 real findings** from the doctor's actual 8-phase run, including an in-engine **auto-fix** ("Rebuilt 11 blend space samples"). The `[HIGH]` exec-fail is gone.
+
+### Tests (+3, 527 → 530 GREEN)
+- `tests/test_mvp_doctor.py`: `_run_python_capture` native short-circuit (RC untouched), RC fallback when native unreachable, and real-native-failure-no-RC-retry. Mirrors the planner's TestNativeFirstPythonStep.
+
+### Known / Next (surfaced by the now-working native execution — observability win, not regressions)
+- `validate_anim_pipeline.py`: `AttributeError: 'Class' has no get_super_class` (UE5.7 API drift) — was hidden behind RC-400, now runs and raises.
+- `verify_in_pie.py`: `NameError: __file__ not defined` — `run_python_native`'s exec wrapper doesn't inject `__file__` for `existing_script` steps that reference it.
+- Planner targets `/Game/Variant_Combat/Animation/ABP_SW_Combat_RT` for pin-drive, which "is not an Animation Blueprint" — asset path/selection.
+- `mvp_doctor.check_ue5_health` still uses `self._bridge.execute_python` (RC) — same native-first treatment applies there next (and a shared native-first executor is the rule-of-three extraction: planner + doctor = 2 uses).
+
+## [0.8.1] — 2026-05-29 (Native-First Planner Python Execution + Rule-of-Three Transport Extraction)
+
+PATCH bump: a bug fix for the finding the v0.8.0 live-fire surfaced, plus the rule-of-three extraction it required. Live-verified end-to-end against UE5 5.7 + BionicsBridge :8090 on 2026-05-29.
+
+### Fixed — planner Python steps now run native-first (the UE5.7-correct path)
+- `core/auto_planner.py` — new `_execute_python_step(bridge, script)` runs a plan step's Python over the native :8090 bridge FIRST, falling back to the RC `bridge.execute_python` 3-strategy path ONLY when the native bridge is unreachable. The `ue5_python` and `existing_script` branches of `_execute_plan_steps` both route through it. The v0.7.5 empty-error backstop is preserved in the fallback branch.
+- **Why**: the v0.8.0 live-fire (`divine_powers --prompt-key rig`) showed the planner's Doctor-fix step failing with `Object Default__PythonScriptLibrary cannot be accessed remotely` (HTTP 400) — `bridge.execute_python`'s three strategies are all RC-based (UDP multicast discovery, RC HTTP `PythonScriptLibrary`, RC console), and all are dead/blocked in UE5.7. The native C++ :8090 bridge runs Python on the game thread and is not subject to that restriction. Extends the T1.A native-first re-routing to the planner's Python-execution steps.
+- **Receipt**: re-running the rig live-fire after the fix → 5/5 plan steps `success=true`, zero RC-400 errors (was: step 1 ok, steps 2–3 silent-failed on the 400). The `animbp_doctor.py` fix-steps now actually run in-engine.
+
+### Changed — rule-of-three transport extraction (behavior-preserving)
+- NEW `bionics_tools/_ue5_native_exec.py` — the deferred fire-and-poll handshake (`resolve_scratch_dir`, `fire_and_poll`, `_poll_for_result`) extracted from `ue5_uasvc.py` + `ue5_autorig.py` (second + third consumers), plus a generic `run_python_native(script, timeout, invoke)` that wraps an arbitrary script to capture its stdout/stderr + exception into a polled result JSON (the game-thread bridge has no synchronous return).
+- `ue5_uasvc.py` / `ue5_autorig.py` — `_resolve_scratch_dir`/`_fire_and_poll` are now thin wrappers over the shared module (kept as module-level seams so unit-test patches still intercept; `noun`/`marker` reproduce the original error strings verbatim). Dropped now-unused `import time` (both) and `_configured_ue5_project_dir` (autorig).
+
+### Tests (+5, 520 → 525 GREEN)
+- `test_planner_native_tool_wiring.py::TestNativeFirstPythonStep` (+5): native short-circuits RC; unreachable native falls back to RC; a real native failure does NOT fall back (no dead-RC retry); empty native error is synthesized; end-to-end `ue5_python` plan step routes native.
+- `test_divine_powers.py` — autouse `_force_rc_fallback` fixture on `TestExecutePlanStepsObservability` forces native unreachable so the RC-backstop tests stay deterministic when a live bridge is up. `time.sleep`/`time.monotonic` patch targets in the uasvc/autorig tests repointed to `_ue5_native_exec` (where the poll loop now lives).
+
+### Known / Next
+- The diagnosis-layer `[HIGH] Could not run animbp_doctor.py inside UE5` finding persists — that is the MVP Doctor's OWN diagnose-time execution (a separate code path from the planner), still RC-routed. Next: extend native-first to the doctor's in-engine execution.
+- `run_python_native` uses a fixed `Saved/Bionics/planner` scratch dir with fixed filenames; safe for sequential steps within a plan, but concurrent `divine_powers` runs would race — add a run-id/uuid suffix if concurrency is introduced.
+
+## [0.8.0] — 2026-05-29 (Fork A — Skeletal Pipeline Native Tools + Planner bionics_tool Execution, Live-Verified)
+
+MINOR bump: new native-first tool surface + a new planner execution method. Productionizes the 2026-05-28 live-proven `.glb → SkeletalMesh → bone-validate → IKRig` pipeline into fail-closed Bionics tools and makes them reachable from the NL planner. All increments live-verified end-to-end against UE5 5.7 + the BionicsBridge `:8090` rail on 2026-05-29.
+
+### Added — native tool surface (+3 tools, 194 → 197)
+- `ue5_uasvc_import_skeletal(file_path, asset_name, dest_path)` — import `.glb/.gltf/.fbx` into a SkeletalMesh+Skeleton+PhysicsAsset over `:8090`. **Fail-closed**: errors if the source lands as a StaticMesh (skin not detected). Ported verbatim from the proven `_ue5_import_skeletal_via_bionics.py` seed.
+- `ue5_uasvc_preflight()` — static check that the project's Interchange FBX flag allows skeletal FBX import (mirrors `mvp_doctor.check_interchange_fbx_flag`).
+- `ue5_autorig_humanoid(skeletal_mesh_path, ikrig_name, ikrig_dest)` — validate 23 Mannequin core bones (UE5.7 `SkeletalMeshComponent` bone enumerator) then build a 9-chain IKRig. **Fail-closed** both ways: refuses a non-humanoid mesh, re-queries IKRig chains to verify.
+
+### Added — planner reachability
+- New `bionics_tool` execution method in `core/auto_planner.py`: divine_powers can now EMIT and EXECUTE plan steps that call registered native tools (`execution_method="bionics_tool"` + `bionics_tool` + `bionics_args`), dispatched via `_invoke_bionics_tool`. Closes the "registered but unreachable from the planner" gap. A `PREFERRED_NATIVE_TOOLS` context block steers the planner toward these fail-closed flows instead of hand-rolled scripts.
+- `_discover_bridge` config fallback (`bionics_tools/ue5_native.py`): native `:8090` tools resolve MyProject's bridge token from `config.yaml paths.ue5_project` when invoked from the MCP-server cwd (the documented 401 workaround). Env + cwd-walk keep priority, so this can't regress existing resolution.
+
+### Tests (+47, 473 → 520 GREEN)
+- `test_ue5_uasvc` (+20), `test_ue5_autorig` (+13), `test_planner_native_tool_wiring` (+8), `test_ue5_native` `_discover_bridge` (+6). All additive; full suite 520/520 (Py 3.12.10).
+
+### Verified — live-fire receipts (2026-05-29, UE5 5.7 + BionicsBridge :8090)
+- **uasvc positive**: `SK_SW_HumanoidTemplate.glb` → `is_skeletal=True`; Mesh+Skeleton+PhysicsAsset landed in `/Game/Test/Skel/`.
+- **autorig positive**: `humanoid=True`, 23 bones (SkeletalMeshComponent method), **9/9** IKRig chains (verified 18).
+- **divine_powers `--prompt-key rig`**: `executed=True, bridge_status=connected`; step 1 emitted `execution_method="bionics_tool"` → ran `ue5_autorig_humanoid` over `:8090` → `success=true`. The planner-wiring path is proven end-to-end.
+- **Negatives (Formahger sword)**: uasvc no-crash (source carries skin → lands skeletal); autorig **FAIL-CLOSED** — refused, 22/23 Mannequin bones missing, `ikrig_path=None`, no rig built.
+
+### Known / Next
+- divine_powers' `ue5_python`/`existing_script` plan steps still route through `bridge.execute_python`'s RC-HTTP fallback, which is dead in UE5.7 (`Object Default__PythonScriptLibrary cannot be accessed remotely`). Surfaced by the live-fire when the planner auto-appended an `animbp_doctor.py` Doctor-fix step (steps 2–3 failed; the v0.7.5 silent-failure backstop caught it honestly rather than false-passing). Next: extend T1.A native-first routing to the planner's Python-exec steps so they use the `:8090` bridge.
+
 ## [0.7.7] — 2026-05-03 (Lint Sweep + Patch-Hint Variant Coverage)
 
 PATCH bundle wrapping the v0.7.5/v0.7.6 live-fire validation cycle. Two parallel changes — (1) ruff `--fix` cleanup of 334 lint findings across the legacy modules, (2) extending v0.7.5's C++ patch-hint detection to catch the `[C++ EDIT]` prefix variant the live-fire surfaced.
@@ -139,7 +235,7 @@ PATCH bundle resolving 7 P0 findings from the v0.7.2 multi-agent + live-fire aud
   Both swapped to `claude-sonnet-4-6`. Same audit lesson as v0.7.2: model-ID drift requires a periodic full-repo grep, not just the touched files of the day.
 
 ### Fixed (doc-drift sweep — 8 surfaces)
-Live MCP registry: **187 tools** across 33 categories (`get_registry().count()` after `register_all()`). Stale claims swept:
+Live MCP registry: **192 tools** across 33 categories (`get_registry().count()` after `register_all()`). Stale claims swept:
 - `pyproject.toml:8` — `"179 tools"` → `"187 tools"` in description; also dropped the misleading "15 dead-code paths cleaned" tail (a one-time v0.5.9 receipt that shouldn't live forever in the package description)
 - `README.md:3` — headline `"179 tools"` → `"187 tools"`
 - `README.md:16` — `"179 tools across 30 categories"` → `"187 tools across 33 categories"` + added EventGraph (K2), Linked Anim Layers, divine_powers to the "what it does" enumeration

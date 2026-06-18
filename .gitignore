@@ -115,6 +115,13 @@ docs/demos/media/*.mkv
 /temp/
 plans/_tmp_*
 
+# Scratch / probe scripts (per-session investigation, never published)
+_phase*
+_probe*
+_run_phase*
+_session_entry_*.md
+plans/auto_*_USER_REQUEST
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Per-machine Claude / agent state — never commit
 # ──────────────────────────────────────────────────────────────────────────────

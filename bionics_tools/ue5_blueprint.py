@@ -189,7 +189,20 @@ else:
     title="Compile Blueprint",
 )
 def ue5_compile_blueprint(asset_path: str) -> ToolResult:
-    """Compile a Blueprint/AnimBlueprint and return errors + warnings."""
+    """Compile a Blueprint/AnimBlueprint and return errors + warnings.
+
+    T1.A native-first re-route (godspeed 2026-05-15): tries the C++ :8090 bridge
+    first (5-20ms, structured errors + warnings, works in packaged builds).
+    Falls back to Python remote-exec ONLY when the bridge is unreachable so
+    legacy environments without the plugin keep working. See Bionics memory
+    `feedback_routing_matrix_correction.md` for the why.
+    """
+    from bionics_tools.ue5_native import call_bridge_tool
+    native = call_bridge_tool("compile_blueprint", {"asset_path": asset_path})
+    # Pass through native success OR any real bridge-side error (e.g. asset not found).
+    # Only fall back to Python when the bridge itself is unreachable.
+    if native.ok or "Bridge unreachable" not in (native.error or ""):
+        return native
     ap = escape_path(asset_path)
     body = f"""
 bp = unreal.load_asset('{ap}')

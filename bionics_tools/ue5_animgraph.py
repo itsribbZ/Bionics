@@ -248,6 +248,205 @@ def ue5_add_state_transition(
 
 
 # ============================================================================
+# T-BRIDGE-1 WIRING TOOLS — close the manual-editor handoff gap
+# ============================================================================
+
+
+@bionics_tool(
+    name="ue5_set_bone_reference",
+    category="ue5_animgraph",
+    safety_tier=SafetyTier.MODERATE,
+    read_only=False,
+    strict=True,
+    aliases=["set-bone-reference", "set-bone-ref"],
+    title="Set Bone Reference",
+)
+def ue5_set_bone_reference(
+    asset_path: Annotated[str, "AnimBP path"],
+    node_name: Annotated[str, "AnimGraph node name (e.g. AnimGraphNode_ModifyBone_0)"],
+    bone_name: Annotated[str, "Bone name on the AnimBP's TargetSkeleton"],
+    bone_property: Annotated[str, "FBoneReference field on inner FAnimNode"] = "BoneToModify",
+) -> ToolResult:
+    """Set an FBoneReference field on an AnimGraph node, resolving MeshBoneIndex
+    against the AnimBP's TargetSkeleton.
+
+    Closes T-BRIDGE-1 hole #1. Common targets:
+      - ModifyBone.BoneToModify (default)
+      - TwoBoneIK.IKBone, TwoBoneIK.JointTargetLocationBone
+      - SkeletalControl variants with FBoneReference fields
+
+    Returns bone_index resolved on the skeleton — INDEX_NONE means the bone
+    name isn't on this skeleton (bridge surfaces a clean error).
+    """
+    return _call_tool("set_bone_reference", {
+        "asset_path": asset_path,
+        "node_name": node_name,
+        "bone_property": bone_property,
+        "bone_name": bone_name,
+    })
+
+
+@bionics_tool(
+    name="ue5_bind_pin_to_property",
+    category="ue5_animgraph",
+    safety_tier=SafetyTier.MODERATE,
+    read_only=False,
+    strict=True,
+    aliases=["bind-pin", "bind-pin-to-property"],
+    title="Bind Pin to Property",
+)
+def ue5_bind_pin_to_property(
+    asset_path: Annotated[str, "AnimBP path"],
+    node_name: Annotated[str, "AnimGraph node name"],
+    pin_name: Annotated[str, "Input pin name to bind (e.g. 'bIsCrouched', 'Alpha')"],
+    source_variable: Annotated[str, "AnimInstance member variable name"],
+) -> ToolResult:
+    """Bind an AnimGraph node input pin to a UAnimInstance member variable via
+    PropertyBindings metadata — the editor "right-click pin -> Bind to <variable>" action.
+
+    WARNING (metadata-only): this writes the PropertyBindings map but does NOT
+    recompile the AnimBP. The runtime FExposedValueHandler subsystem is patched
+    only inside CompileBlueprint, so a bind made here can silently fail to drive at
+    runtime (T-pose / dead-pin). The C++ now verifies the metadata PERSISTED
+    (returns ok=false otherwise) — but persistence is not runtime propagation.
+
+    For any live/runtime pin driving, prefer ue5_drive_animgraph_pin_via_variable
+    (atomic spawn K2Node_VariableGet + wire + compile — runtime-correct). Keep
+    bind_pin only for editor-time/display bindings that get compiled later.
+
+    Closes T-BRIDGE-1 hole #2. Verifies the variable exists on the AnimBP class
+    hierarchy before binding (fails clean if missing).
+    """
+    return _call_tool("bind_pin_to_property", {
+        "asset_path": asset_path,
+        "node_name": node_name,
+        "pin_name": pin_name,
+        "source_variable": source_variable,
+    })
+
+
+@bionics_tool(
+    name="ue5_splice_pose_flow",
+    category="ue5_animgraph",
+    safety_tier=SafetyTier.MODERATE,
+    read_only=False,
+    strict=True,
+    aliases=["splice-pose", "splice-pose-flow"],
+    title="Splice Pose Flow",
+)
+def ue5_splice_pose_flow(
+    asset_path: Annotated[str, "AnimBP path"],
+    source_node: Annotated[str, "Existing source node name (output side)"],
+    source_pin: Annotated[str, "Output pin on source node"],
+    sink_node: Annotated[str, "Existing sink node name (input side)"],
+    sink_pin: Annotated[str, "Input pin on sink node"],
+    splice_node: Annotated[str, "New node to insert"],
+    splice_input_pin: Annotated[str, "Input pin on splice node (receives source)"],
+    splice_output_pin: Annotated[str, "Output pin on splice node (drives sink)"],
+) -> ToolResult:
+    """Atomic insert: break existing source→sink wire (if any), then wire
+    source→splice.in and splice.out→sink.
+
+    Closes T-BRIDGE-1 hole #3. Returns broke_existing_wire (false = first-time
+    wiring, no break needed). Use when adding LayeredBlendPerBone, Inertialization,
+    or any pose-modifying node into an existing chain (e.g. UpperBody slot fix).
+    """
+    return _call_tool("splice_pose_flow", {
+        "asset_path": asset_path,
+        "source_node": source_node,
+        "source_pin": source_pin,
+        "sink_node": sink_node,
+        "sink_pin": sink_pin,
+        "splice_node": splice_node,
+        "splice_input_pin": splice_input_pin,
+        "splice_output_pin": splice_output_pin,
+    })
+
+
+# ============================================================================
+# RUNTIME-CORRECT VARIABLE DRIVING (2026-05-15 campaign — LIMIT 1 & 2)
+# ============================================================================
+
+
+@bionics_tool(
+    name="ue5_create_animgraph_variable_get",
+    category="ue5_animgraph",
+    safety_tier=SafetyTier.MODERATE,
+    read_only=False,
+    strict=True,
+    aliases=["create-animgraph-variable-get", "animgraph-variable-get"],
+    title="Create AnimGraph Variable Get",
+)
+def ue5_create_animgraph_variable_get(
+    asset_path: Annotated[str, "AnimBP path like /Game/Blueprints/ABP_Character"],
+    variable_name: Annotated[str, "AnimInstance member variable to read (must exist on the AnimBP class)"],
+    pos_x: Annotated[int, "Node X position in the graph"] = 0,
+    pos_y: Annotated[int, "Node Y position in the graph"] = 0,
+) -> ToolResult:
+    """Spawn a K2Node_VariableGet inside an AnimBP's AnimGraph (NOT EventGraph).
+
+    Python cannot build a K2Node_VariableGet directly — FMemberReference's fields are
+    protected UPROPERTYs with no UFUNCTION mutators — so this native C++ tool wraps the
+    canonical NewObject -> SetSelfMember -> AddNode -> AllocateDefaultPins pattern.
+    Validates the variable exists on the AnimBP class. Returns the new node name + GUID
+    + output pin name.
+
+    Does NOT wire or compile. For the atomic spawn+wire+compile (the runtime-correct way
+    to drive a pin), use ue5_drive_animgraph_pin_via_variable instead.
+    """
+    return _call_tool("create_animgraph_variable_get", {
+        "asset_path": asset_path,
+        "variable_name": variable_name,
+        "pos_x": pos_x,
+        "pos_y": pos_y,
+    })
+
+
+@bionics_tool(
+    name="ue5_drive_animgraph_pin_via_variable",
+    category="ue5_animgraph",
+    safety_tier=SafetyTier.MODERATE,
+    read_only=False,
+    strict=True,
+    aliases=["drive-animgraph-pin", "drive-pin-via-variable"],
+    title="Drive AnimGraph Pin via Variable",
+)
+def ue5_drive_animgraph_pin_via_variable(
+    asset_path: Annotated[str, "AnimBP path"],
+    variable_name: Annotated[str, "AnimInstance member variable to drive the pin from"],
+    target_node_name: Annotated[str, "GetName() of the anim node to drive (e.g. BlendListByBool_0)"],
+    target_pin_name: Annotated[str, "Input pin on the target node (e.g. 'bActiveValue', 'Alpha')"],
+    pos_x: Annotated[int, "VariableGet node X position"] = 0,
+    pos_y: Annotated[int, "VariableGet node Y position"] = 0,
+    compile: Annotated[bool, "Compile the AnimBP after wiring (default True — required for runtime propagation)"] = True,  # noqa: A002
+) -> ToolResult:
+    """Atomic spawn-wire-compile — the RUNTIME-CORRECT way to drive an AnimGraph pin
+    from an AnimInstance variable.
+
+    Spawns a K2Node_VariableGet for `variable_name`, wires its output to
+    `target_node_name`.`target_pin_name`, then compiles the AnimBP so the runtime
+    FExposedValueHandler subsystem actually picks up the binding.
+
+    PREFER THIS over ue5_bind_pin_to_property for any live/runtime driving.
+    bind_pin_to_property writes PropertyBindings metadata only and does NOT recompile,
+    so the binding never propagates at runtime. Explicit graph wires ARE what the
+    compiler registers as eval handlers — hence this is the correct path.
+
+    The C++ refuses ok=True unless the wire persisted AND (when compiling) the AnimBP
+    compiled clean, so the returned verified_linked / compile_ok are trustworthy.
+    """
+    return _call_tool("drive_animgraph_pin_via_variable", {
+        "asset_path": asset_path,
+        "variable_name": variable_name,
+        "target_node_name": target_node_name,
+        "target_pin_name": target_pin_name,
+        "pos_x": pos_x,
+        "pos_y": pos_y,
+        "compile": compile,
+    })
+
+
+# ============================================================================
 # BPDOCTOR INTEGRATION
 # ============================================================================
 

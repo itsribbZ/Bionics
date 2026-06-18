@@ -5,6 +5,7 @@
 #include "Tools/SaveAssetTool.h"
 #include "Tools/QueryAssetTool.h"
 #include "Tools/SpawnActorEditorTool.h"
+#include "Tools/LiveCodingCompileTool.h"
 
 #include "Engine/Blueprint.h"
 #include "Kismet2/KismetEditorUtilities.h"
@@ -14,6 +15,8 @@
 #include "EditorAssetLibrary.h"
 #include "Subsystems/EditorActorSubsystem.h"
 #include "Editor.h"
+#include "Engine/Engine.h"
+#include "Modules/ModuleManager.h"
 #include "ScopedTransaction.h"
 
 // ---- CompileBlueprintTool ----
@@ -161,5 +164,50 @@ bool USpawnActorEditorTool::Execute(const TSharedPtr<FJsonObject>& Args,
 	OutResult->SetStringField(TEXT("name"), Spawned->GetName());
 	OutResult->SetStringField(TEXT("label"), Spawned->GetActorLabel());
 	OutResult->SetStringField(TEXT("class"), ActorCls->GetName());
+	return true;
+}
+
+// ---- LiveCodingCompileTool ----
+// Triggers Live Coding hot reload via the LiveCoding console command.
+// Console-command path is universally supported across UE5 versions (5.1+) and
+// avoids dynamic linkage to the LiveCoding module's private API surface, which
+// drifts between releases. Module-loaded preflight surfaces the disabled-plugin
+// case cleanly.
+
+TSharedPtr<FJsonObject> ULiveCodingCompileTool::GetInputSchema() const
+{
+	return MakeSchema({}, {});
+}
+
+bool ULiveCodingCompileTool::Execute(const TSharedPtr<FJsonObject>& Args,
+                                      TSharedPtr<FJsonObject>& OutResult, FString& OutError)
+{
+	OutResult = MakeShared<FJsonObject>();
+
+	const bool bModuleLoaded = FModuleManager::Get().IsModuleLoaded(TEXT("LiveCoding"));
+	OutResult->SetBoolField(TEXT("module_loaded"), bModuleLoaded);
+	if (!bModuleLoaded)
+	{
+		OutError = TEXT("LiveCoding module not loaded — Edit → Plugins → Programming → Live Coding");
+		OutResult->SetBoolField(TEXT("ok"), false);
+		OutResult->SetBoolField(TEXT("triggered"), false);
+		return false;
+	}
+
+	if (!GEngine)
+	{
+		OutError = TEXT("GEngine not available");
+		OutResult->SetBoolField(TEXT("ok"), false);
+		OutResult->SetBoolField(TEXT("triggered"), false);
+		return false;
+	}
+
+	GEngine->Exec(nullptr, TEXT("LiveCoding.Compile"));
+
+	OutResult->SetBoolField(TEXT("ok"), true);
+	OutResult->SetBoolField(TEXT("triggered"), true);
+	OutResult->SetStringField(TEXT("note"),
+		TEXT("Compile triggered. If no compile starts, ensure Live Coding is enabled "
+		     "(Tools → Live Coding → Enable in editor menu)."));
 	return true;
 }

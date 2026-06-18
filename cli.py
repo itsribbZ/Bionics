@@ -1,7 +1,7 @@
 """Bionics CLI — Command-line interface to the tool registry.
 
 Exposes every registered Bionics tool as a CLI subcommand, auto-generated
-from the tool schemas. Mirrors soft-ue-cli's CLI surface but with ~80+ tools
+from the tool schemas. Mirrors soft-ue-cli's CLI surface but with 192 tools
 covering desktop automation + UE5.
 
 Examples:

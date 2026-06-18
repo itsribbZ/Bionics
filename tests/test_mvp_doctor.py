@@ -148,6 +148,145 @@ def test_planner_integration_format():
     print("  planner_format: PASS")
 
 
+def test_diagnose_failclosed_unregistered_category():
+    """P0: diagnose() must NOT report demo_ready on a category with zero checks.
+
+    EXTRACTION has zero @check decorators today (MOVEMENT gained check_cmc_slide_config
+    2026-05-30; ASSET has two). The old code ran 0 checks and returned demo_ready=True
+    (vacuous all() over []), handing the pipeline gate a green light from no validation.
+    The fail-closed guard turns that into a CRITICAL.
+    """
+    doctor = MVPDoctor(ue5_project_path=".")
+    diag = doctor.diagnose(categories=[Category.EXTRACTION])
+    assert diag.checks_run == 0, "EXTRACTION has no registered checks"
+    assert not diag.is_demo_ready, "empty check set must fail-closed, not vacuously pass"
+    assert any(f.id == "NO_VALIDATOR_FOR_REQUESTED_CATEGORIES" for f in diag.findings)
+    assert diag.critical_count >= 1
+    print("  failclosed_unregistered: PASS")
+
+
+def test_diagnose_failclosed_string_category():
+    """String category names coerce to enums; unknown strings fail-closed."""
+    doctor = MVPDoctor(ue5_project_path=".")
+    # 'EXTRACTION' (string) coerces to Category.EXTRACTION — still zero checks -> fail-closed.
+    diag = doctor.diagnose(categories=["EXTRACTION"])
+    assert not diag.is_demo_ready
+    assert any(f.id == "NO_VALIDATOR_FOR_REQUESTED_CATEGORIES" for f in diag.findings)
+    # Garbage string -> UNKNOWN_CATEGORY critical, never a vacuous pass.
+    diag2 = doctor.diagnose(categories=["frobnicate"])
+    assert not diag2.is_demo_ready
+    assert any(f.id.startswith("UNKNOWN_CATEGORY") for f in diag2.findings)
+    print("  failclosed_string: PASS")
+
+
+def test_diagnose_runall_not_flagged():
+    """diagnose(None) / diagnose([]) run all checks; the guard must NOT fire there."""
+    doctor = MVPDoctor(ue5_project_path=".")
+    for arg in (None, []):
+        diag = doctor.diagnose(categories=arg)
+        assert diag.checks_run > 0, f"run-all should execute checks (arg={arg!r})"
+        assert not any(
+            f.id == "NO_VALIDATOR_FOR_REQUESTED_CATEGORIES" for f in diag.findings
+        ), "run-all path must never be flagged as missing a validator"
+    print("  runall_not_flagged: PASS")
+
+
+def _asset_doctor(tmp_path, fbx_flag_line="Interchange.FeatureFlags.Import.FBX=0"):
+    """Build an MVPDoctor over a fake project dir with an optional FBX flag line."""
+    (tmp_path / "Config").mkdir(exist_ok=True)
+    body = "[/Script/Engine.Engine]\n" + (f"{fbx_flag_line}\n" if fbx_flag_line else "")
+    (tmp_path / "Config" / "DefaultEngine.ini").write_text(body, encoding="utf-8")
+    return MVPDoctor(ue5_project_path=str(tmp_path))
+
+
+def test_asset_check_interchange_fbx_flag(tmp_path):
+    """The static asset-preflight: skeletal imports break silently without FBX=0."""
+    # Missing flag -> CRITICAL blocker.
+    diag = _asset_doctor(tmp_path, fbx_flag_line=None).diagnose(categories=[Category.ASSET])
+    assert any(f.id == "ASSET_INTERCHANGE_FBX_FLAG_MISSING" and f.severity == Severity.CRITICAL
+               for f in diag.findings)
+    assert not diag.is_demo_ready
+    # Wrong value -> CRITICAL.
+    diag2 = _asset_doctor(tmp_path, "Interchange.FeatureFlags.Import.FBX=1").diagnose(categories=[Category.ASSET])
+    assert any(f.id == "ASSET_INTERCHANGE_FBX_FLAG_WRONG" for f in diag2.findings)
+    # Correct value -> no interchange finding.
+    diag3 = _asset_doctor(tmp_path, "Interchange.FeatureFlags.Import.FBX=0").diagnose(categories=[Category.ASSET])
+    assert not any(f.id.startswith("ASSET_INTERCHANGE_FBX_FLAG") for f in diag3.findings)
+    print("  asset_interchange_flag: PASS")
+
+
+def test_asset_check_skeletal_presence(tmp_path):
+    """Pipeline-stage signal: INFO when zero SK_SW_ skeletal assets exist, gone once one lands."""
+    content = tmp_path / "Content"
+    content.mkdir(exist_ok=True)
+    diag = _asset_doctor(tmp_path).diagnose(categories=[Category.ASSET])
+    assert any(f.id == "ASSET_NO_SKELETAL_IN_ENGINE" for f in diag.findings)
+    # Land a skeletal asset -> the INFO signal clears (fresh doctor, fresh file cache).
+    (content / "SK_SW_Test.uasset").write_bytes(b"\x00")
+    diag2 = _asset_doctor(tmp_path).diagnose(categories=[Category.ASSET])
+    assert not any(f.id == "ASSET_NO_SKELETAL_IN_ENGINE" for f in diag2.findings)
+    print("  asset_skeletal_presence: PASS")
+
+
+def test_asset_category_now_has_checks(tmp_path):
+    """ASSET is no longer a zero-check category — NO_VALIDATOR must NOT fire for it."""
+    diag = _asset_doctor(tmp_path).diagnose(categories=[Category.ASSET])
+    assert diag.checks_run >= 2, "ASSET should run its registered checks"
+    assert not any(f.id == "NO_VALIDATOR_FOR_REQUESTED_CATEGORIES" for f in diag.findings)
+    print("  asset_has_checks: PASS")
+
+
+def test_run_python_capture_native_first():
+    """v0.8.2: _run_python_capture runs native :8090 first; RC bridge.execute_python untouched."""
+    from unittest.mock import MagicMock, patch
+    doctor = MVPDoctor(ue5_project_path=".")
+    bridge = MagicMock()
+    doctor._bridge = bridge
+    with patch("bionics_tools._ue5_native_exec.run_python_native",
+               return_value={"reachable": True, "success": True,
+                             "output": '  {"verdict": "READY"}  ', "error": ""}):
+        success, output, error = doctor._run_python_capture("print('x')")
+    assert success is True
+    assert output == '{"verdict": "READY"}'  # stripped
+    assert error == ""
+    bridge.execute_python.assert_not_called()
+    print("  run_python_capture_native_first: PASS")
+
+
+def test_run_python_capture_falls_back_to_rc():
+    """When the native bridge is unreachable, _run_python_capture falls back to RC."""
+    from unittest.mock import MagicMock, patch
+    doctor = MVPDoctor(ue5_project_path=".")
+    bridge = MagicMock()
+    bridge.execute_python.return_value = MagicMock(
+        success=True, error="", data={"output": [{"output": '{"verdict": "READY"}'}]}
+    )
+    doctor._bridge = bridge
+    with patch("bionics_tools._ue5_native_exec.run_python_native",
+               return_value={"reachable": False, "error": "bridge off"}):
+        success, output, _error = doctor._run_python_capture("print('x')")
+    assert success is True
+    assert output == '{"verdict": "READY"}'
+    bridge.execute_python.assert_called_once()
+    print("  run_python_capture_falls_back_to_rc: PASS")
+
+
+def test_run_python_capture_native_failure_no_rc_retry():
+    """A real native failure (script ran + raised) must NOT fall back to the dead RC path."""
+    from unittest.mock import MagicMock, patch
+    doctor = MVPDoctor(ue5_project_path=".")
+    bridge = MagicMock()
+    doctor._bridge = bridge
+    with patch("bionics_tools._ue5_native_exec.run_python_native",
+               return_value={"reachable": True, "success": False,
+                             "output": "", "error": "RuntimeError: boom"}):
+        success, _output, error = doctor._run_python_capture("raise RuntimeError('boom')")
+    assert success is False
+    assert "RuntimeError" in error
+    bridge.execute_python.assert_not_called()
+    print("  run_python_capture_native_failure_no_rc_retry: PASS")
+
+
 if __name__ == "__main__":
     print("MVP Doctor Tests:")
     test_diagnosis_data_model()
@@ -155,4 +294,16 @@ if __name__ == "__main__":
     test_diagnosis_summary_format()
     test_planner_integration_format()
     test_doctor_runs_on_real_project()
+    test_diagnose_failclosed_unregistered_category()
+    test_diagnose_failclosed_string_category()
+    test_diagnose_runall_not_flagged()
+    test_run_python_capture_native_first()
+    test_run_python_capture_falls_back_to_rc()
+    test_run_python_capture_native_failure_no_rc_retry()
+    import tempfile
+    with tempfile.TemporaryDirectory() as _td:
+        _tp = Path(_td)
+        test_asset_check_interchange_fbx_flag(_tp)
+        test_asset_check_skeletal_presence(_tp)
+        test_asset_category_now_has_checks(_tp)
     print("\nAll tests passed.")

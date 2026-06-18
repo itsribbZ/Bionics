@@ -220,6 +220,26 @@ def check(name: str, category: Category):
     return decorator
 
 
+def _coerce_category(value) -> "Category | None":
+    """Resolve a Category from an enum, its name ('ASSET'), or its value ('asset').
+
+    Returns None for anything unrecognized so diagnose() can fail-closed on it
+    instead of silently skipping every check — a bare string never matches a
+    registered Category and would otherwise read as a vacuous pass.
+    """
+    if isinstance(value, Category):
+        return value
+    s = str(value).strip()
+    try:
+        return Category[s.upper()]
+    except KeyError:
+        pass
+    try:
+        return Category(s.lower())
+    except ValueError:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # MVP Doctor
 # ---------------------------------------------------------------------------
@@ -302,6 +322,261 @@ class MVPDoctor:
     # ------------------------------------------------------------------
     # Diagnostic checks
     # ------------------------------------------------------------------
+
+    @check("Interchange FBX Importer Disabled", Category.ASSET)
+    def check_interchange_fbx_flag(self) -> list[Finding]:
+        """Skeletal FBX from Blender 5.1 imports correctly ONLY when the legacy
+        importer is forced via `Interchange.FeatureFlags.Import.FBX=0` in
+        DefaultEngine.ini (SKELETAL_PIPELINE.md import section). If the flag is
+        missing or not 0, skeletal imports silently use the broken Interchange path
+        and the whole asset rail fails open before it ever reaches PIE.
+
+        This is the engine-free half of the asset preflight — a pure static read of
+        Config/DefaultEngine.ini. The in-engine bone-integrity validator (bone count,
+        physics asset, retarget source against MANNEQUIN_CORE_BONES) is the :8090
+        AssetDoctor half and requires a live editor.
+        """
+        ini = self._project / "Config" / "DefaultEngine.ini"
+        content = self._read_file(ini)
+        if not content:
+            return [Finding(
+                id="ASSET_NO_DEFAULTENGINE_INI",
+                title="DefaultEngine.ini not found — cannot verify skeletal import config",
+                description=(
+                    f"Expected {ini}. The skeletal-import preflight cannot confirm the legacy "
+                    "FBX importer is forced, so a skeletal import could silently fail."
+                ),
+                severity=Severity.HIGH,
+                category=Category.ASSET,
+                fix_method=FixMethod.EDITOR_MANUAL,
+                fix_hint="Confirm the UE5 project path; ensure Config/DefaultEngine.ini has Interchange.FeatureFlags.Import.FBX=0",
+                file_path=str(ini),
+            )]
+        m = re.search(r"^\s*Interchange\.FeatureFlags\.Import\.FBX\s*=\s*(\d+)", content, re.MULTILINE)
+        if m is None:
+            return [Finding(
+                id="ASSET_INTERCHANGE_FBX_FLAG_MISSING",
+                title="Interchange FBX import flag absent — skeletal imports will use the broken path",
+                description=(
+                    "Interchange.FeatureFlags.Import.FBX=0 is missing from DefaultEngine.ini. "
+                    "Blender 5.1 FBX skeletal exports import correctly only via the legacy importer; "
+                    "without this flag the Interchange importer silently mangles or drops the skeleton."
+                ),
+                severity=Severity.CRITICAL,
+                category=Category.ASSET,
+                fix_method=FixMethod.EDITOR_MANUAL,
+                fix_hint="Add `Interchange.FeatureFlags.Import.FBX=0` to Config/DefaultEngine.ini",
+                file_path=str(ini),
+            )]
+        if m.group(1) != "0":
+            return [Finding(
+                id="ASSET_INTERCHANGE_FBX_FLAG_WRONG",
+                title=f"Interchange FBX import flag is {m.group(1)}, must be 0",
+                description=(
+                    "Interchange.FeatureFlags.Import.FBX must be 0 to force the legacy FBX importer. "
+                    f"It is currently {m.group(1)} — skeletal imports from Blender will use the broken "
+                    "Interchange path and fail open."
+                ),
+                severity=Severity.CRITICAL,
+                category=Category.ASSET,
+                fix_method=FixMethod.EDITOR_MANUAL,
+                fix_hint="Set Interchange.FeatureFlags.Import.FBX=0 in Config/DefaultEngine.ini",
+                file_path=str(ini),
+                line_number=self._find_line(ini, "Interchange.FeatureFlags.Import.FBX"),
+            )]
+        return []
+
+    @check("Skeletal Assets In Engine", Category.ASSET)
+    def check_skeletal_assets_present(self) -> list[Finding]:
+        """Pipeline-stage signal: how many SK_SW_ skeletal meshes have landed in
+        /Game. The idea->playable pivotal unlock (M5) is 'one green skeletal asset in
+        PIE'; zero means the skeletal rail has not produced its first asset yet.
+        Informational — does not block the demo on its own (static meshes import fine).
+        """
+        if not self._content.exists():
+            return []
+        if not any(self._content.rglob("SK_SW_*.uasset")):
+            return [Finding(
+                id="ASSET_NO_SKELETAL_IN_ENGINE",
+                title="No SK_SW_ skeletal mesh assets in /Game yet",
+                description=(
+                    "Zero SK_SW_*.uasset skeletal meshes found under Content. The skeletal asset "
+                    "rail (Blender -> :8090 import -> IKRig -> PIE) has not produced its first "
+                    "asset — the M5 pivotal unlock is not yet reached."
+                ),
+                severity=Severity.INFO,
+                category=Category.ASSET,
+                fix_method=FixMethod.NONE,
+                fix_hint="Run the uasvc skeletal import (Build A) once UE5 is open to land the first SK_SW_ asset",
+            )]
+        return []
+
+    @check("Skeleton Bone Integrity (Live)", Category.ASSET)
+    def check_skeleton_bone_integrity(self) -> list[Finding]:
+        """Bridge-gated live ASSET check (punch-list #2, 2026-05-30): validates that SK_SW_
+        skeletal meshes in /Game carry all 23 Mannequin core bones, via the native :8090
+        ue5_validate_skeleton_bones tool. This is the in-engine AssetDoctor half that the
+        static ASSET checks (FBX flag, skeletal-presence) can't cover — a mesh that would
+        fail rigging now also fails the demo_ready sweep, not just an explicit autorig step.
+
+        Mirrors check_animbp's bridge gating: when UE5 isn't connected, emits a single INFO
+        finding and skips (never a false CRITICAL). Caps at 5 meshes to avoid flooding the editor.
+        """
+        findings: list[Finding] = []
+        if self._bridge is None or not getattr(self._bridge, "is_connected", False):
+            findings.append(Finding(
+                id="BONE_INTEGRITY_NO_BRIDGE",
+                title="UE5 not connected — skipping live skeleton bone integrity check",
+                description=(
+                    "Bone integrity needs a live :8090 connection to enumerate bones via "
+                    "SkeletalMeshComponent. Static ASSET checks still ran."
+                ),
+                severity=Severity.INFO,
+                category=Category.ASSET,
+                fix_method=FixMethod.NONE,
+            ))
+            return findings
+
+        if not self._content.exists():
+            return []
+        sk_paths = sorted(self._content.rglob("SK_SW_*.uasset"))
+        if not sk_paths:
+            return []  # check_skeletal_assets_present already covers the zero case
+
+        # Filesystem path -> /Game content path
+        ue_paths: list[str] = []
+        for p in sk_paths[:5]:  # cap to avoid flooding the editor
+            try:
+                rel = p.relative_to(self._content)
+                ue_paths.append("/Game/" + rel.as_posix()[: -len(".uasset")])
+            except ValueError:
+                continue
+
+        try:
+            from bionics_tools.ue5_autorig import ue5_validate_skeleton_bones
+        except Exception as e:  # noqa: BLE001 — tool import failure is non-fatal
+            findings.append(Finding(
+                id="BONE_INTEGRITY_TOOL_UNAVAILABLE",
+                title=f"ue5_validate_skeleton_bones unavailable: {e}",
+                description=str(e),
+                severity=Severity.LOW,
+                category=Category.ASSET,
+            ))
+            return findings
+
+        for ue_path in ue_paths:
+            try:
+                result = ue5_validate_skeleton_bones(skeletal_mesh_path=ue_path, timeout_s=30.0)
+            except Exception as e:  # noqa: BLE001
+                findings.append(Finding(
+                    id=f"BONE_INTEGRITY_ERROR_{Path(ue_path).name.upper()}",
+                    title=f"Bone integrity check raised for {Path(ue_path).name}: {e}",
+                    description=str(e),
+                    severity=Severity.MEDIUM,
+                    category=Category.ASSET,
+                ))
+                continue
+            if not getattr(result, "ok", False):
+                missing = (getattr(result, "data", None) or {}).get("mannequin_missing") or []
+                findings.append(Finding(
+                    id=f"BONE_INTEGRITY_FAIL_{Path(ue_path).name.upper()}",
+                    title=f"{Path(ue_path).name}: not a valid humanoid skeleton",
+                    description=(
+                        f"{ue_path} failed bone integrity (missing {missing[:10]}). It will T-pose "
+                        "under a Mannequin retarget and is not demo-ready."
+                    ),
+                    severity=Severity.HIGH,
+                    category=Category.ASSET,
+                    fix_method=FixMethod.NONE,
+                    fix_hint=(
+                        "Re-export from Blender with a full Mannequin armature and reimport via "
+                        "ue5_uasvc_import_skeletal."
+                    ),
+                ))
+        return findings
+
+    @check("CMC Slide Config", Category.MOVEMENT)
+    def check_cmc_slide_config(self) -> list[Finding]:
+        """Static MOVEMENT validator (no bridge): the custom slide physics in
+        SWCharacterMovementComponent.h must be present and sane. A zero
+        SlideGroundFriction is a frictionless slide that never decays; a zero
+        SlideMaxDuration means the slide never auto-stands. Pure file read — mirrors
+        check_interchange_fbx_flag's static pattern, so MOVEMENT is no longer a
+        zero-check category that can only ever fail-closed.
+
+        Grounded against the real header (verified 2026-05-30): the Sworder|Slide block
+        declares SlideImpulseStrength / SlideMinSpeed / SlideGroundFriction (0.5f) /
+        BrakingDecelerationSliding / SlideMaxDuration (1.5f).
+        """
+        findings: list[Finding] = []
+        cmc_h = self._source / "Variant_Combat" / "SWCharacterMovementComponent.h"
+        content = self._read_file(cmc_h)
+        if not content:
+            findings.append(Finding(
+                id="CMC_H_MISSING",
+                title="SWCharacterMovementComponent.h not found — slide physics unverifiable",
+                description=(
+                    f"Expected {cmc_h}. The custom CharacterMovementComponent may have been "
+                    "renamed or moved; slide/movement feel config cannot be validated."
+                ),
+                severity=Severity.MEDIUM,
+                category=Category.MOVEMENT,
+                fix_method=FixMethod.NONE,
+                file_path=str(cmc_h),
+            ))
+            return findings
+
+        # SlideGroundFriction must be declared and non-zero (0.0 = frictionless infinite slide).
+        m = re.search(r"SlideGroundFriction\s*=\s*([0-9.]+)f?", content)
+        if m is None:
+            findings.append(Finding(
+                id="CMC_SLIDE_FRICTION_MISSING",
+                title="SlideGroundFriction not declared in SWCharacterMovementComponent.h",
+                description=(
+                    "The slide friction constant is absent — slide falls back to the stock CMC "
+                    "GroundFriction and loses its tuned feel."
+                ),
+                severity=Severity.MEDIUM,
+                category=Category.MOVEMENT,
+                fix_method=FixMethod.CPP_EDIT,
+                fix_hint="Declare `float SlideGroundFriction = 0.5f;` on USWCharacterMovementComponent.",
+                file_path=str(cmc_h),
+            ))
+        elif float(m.group(1)) == 0.0:
+            findings.append(Finding(
+                id="CMC_SLIDE_FRICTION_ZERO",
+                title="SlideGroundFriction = 0.0 — frictionless slide never decays",
+                description=(
+                    "A zero SlideGroundFriction removes all slide deceleration; the player slides "
+                    "forever. Set a small positive value (~0.5)."
+                ),
+                severity=Severity.HIGH,
+                category=Category.MOVEMENT,
+                fix_method=FixMethod.CPP_EDIT,
+                fix_hint="Set SlideGroundFriction to ~0.5f in SWCharacterMovementComponent.h.",
+                file_path=str(cmc_h),
+                line_number=self._find_line(cmc_h, "SlideGroundFriction"),
+            ))
+
+        # SlideMaxDuration, when declared, must be > 0 (0.0 = slide never auto-stands).
+        m2 = re.search(r"SlideMaxDuration\s*=\s*([0-9.]+)f?", content)
+        if m2 is not None and float(m2.group(1)) == 0.0:
+            findings.append(Finding(
+                id="CMC_SLIDE_MAXDURATION_ZERO",
+                title="SlideMaxDuration = 0.0 — slide never auto-stands",
+                description=(
+                    "A zero SlideMaxDuration means the auto-stand timer never fires; the player can "
+                    "get stuck sliding. Set a positive duration (~1.5s)."
+                ),
+                severity=Severity.MEDIUM,
+                category=Category.MOVEMENT,
+                fix_method=FixMethod.CPP_EDIT,
+                fix_hint="Set SlideMaxDuration to ~1.5f in SWCharacterMovementComponent.h.",
+                file_path=str(cmc_h),
+                line_number=self._find_line(cmc_h, "SlideMaxDuration"),
+            ))
+
+        return findings
 
     @check("DirectionalLight Mobility", Category.EDITOR)
     def check_directional_light(self) -> list[Finding]:
@@ -776,6 +1051,35 @@ except Exception as e:
 
         return findings
 
+    def _run_python_capture(self, script: str, timeout_s: float = 60.0) -> tuple[bool, str, str]:
+        """Run a capture script in UE5 and return (success, output_text, error).
+
+        Native :8090 FIRST — the only path that works in UE5.7 (the RC HTTP
+        PythonScriptLibrary call is blocked, RC multicast discovery is dead). Falls back to
+        the RC bridge.execute_python ONLY when the native bridge is unreachable, so a setup
+        without the BionicsBridge plugin behaves exactly as before. output_text is the
+        captured stdout (native) or the joined RC output lines, so callers can scrape it for
+        the doctor's JSON summary. Mirrors AutoPlanner._execute_python_step (extract a shared
+        native-first executor on the third use).
+        """
+        try:
+            from bionics_tools._ue5_native_exec import run_python_native
+            from bionics_tools.ue5_native import call_bridge_tool
+            native = run_python_native(script, timeout_s, invoke=call_bridge_tool)
+        except Exception as e:  # noqa: BLE001 — any native-path failure falls back to RC
+            native = {"reachable": False, "error": f"native exec path unavailable: {e}"}
+
+        if native.get("reachable"):
+            ok = bool(native.get("success"))
+            return ok, (native.get("output") or "").strip(), ("" if ok else (native.get("error") or ""))
+
+        # Fallback: RC bridge.execute_python.
+        result = self._bridge.execute_python(script)
+        output_text = "\n".join(
+            ln.get("output", "") for ln in (result.data or {}).get("output", [])
+        ).strip()
+        return bool(result.success), output_text, ("" if result.success else (result.error or ""))
+
     @check("AnimBP Doctor (Live)", Category.ANIMATION)
     def check_animbp(self) -> list[Finding]:
         """Run the AnimBP Doctor script inside UE5 and parse its output into Findings.
@@ -812,8 +1116,9 @@ except Exception as e:
             return findings
 
         # Run the AnimBP doctor with output capture
-        self._log("Running AnimBP Doctor inside UE5...")
+        self._log("Running AnimBP Doctor inside UE5 (native :8090 first)...")
         capture_script = f'''
+import unreal
 import json
 _bionics_lines = []
 _bionics_orig_log = unreal.log
@@ -852,12 +1157,14 @@ _summary = {{
 }}
 print(json.dumps(_summary))
 '''
-        result = self._bridge.execute_python(capture_script)
+        # Native :8090 FIRST (the path that works in UE5.7 — the RC HTTP PythonScriptLibrary
+        # call is blocked), RC fallback only when the native bridge is unreachable.
+        success, output_text, exec_err = self._run_python_capture(capture_script)
 
-        if not result.success:
+        if not success:
             findings.append(Finding(
                 id="ANIMBP_DOCTOR_EXEC_FAIL",
-                title=f"AnimBP Doctor execution failed: {result.error}",
+                title=f"AnimBP Doctor execution failed: {exec_err}",
                 description="Could not run animbp_doctor.py inside UE5.",
                 severity=Severity.HIGH,
                 category=Category.ANIMATION,
@@ -865,30 +1172,20 @@ print(json.dumps(_summary))
             ))
             return findings
 
-        # Parse the JSON summary from output
+        # Parse the JSON summary from output (last line should be print(json.dumps(...))).
         try:
-            output_lines = result.data.get("output", [])
-            output_text = "\n".join(
-                l.get("output", "") for l in output_lines
-            ).strip()
-
-            # Find the JSON blob (last line should be the print(json.dumps(...)))
             summary = None
             for line in reversed(output_text.split("\n")):
                 line = line.strip()
                 if line.startswith("{"):
                     summary = json.loads(line)
                     break
-
             if summary is None:
-                # Fallback: parse raw output for tags
+                # Fallback: parse raw output for tags.
                 summary = self._parse_animbp_raw_output(output_text)
-
         except (json.JSONDecodeError, KeyError) as e:
             self._log(f"AnimBP Doctor output parse error: {e}")
-            summary = self._parse_animbp_raw_output(
-                "\n".join(l.get("output", "") for l in result.data.get("output", []))
-            )
+            summary = self._parse_animbp_raw_output(output_text)
 
         # Convert summary into Findings
         for fail_msg in summary.get("fail", []):
@@ -1043,19 +1340,50 @@ print(json.dumps(_summary))
     # Main entry point
     # ------------------------------------------------------------------
 
-    def diagnose(self, categories: list[Category] | None = None) -> Diagnosis:
+    def diagnose(self, categories: "list | None" = None) -> Diagnosis:
         """Run all diagnostic checks and return structured results.
 
         Args:
-            categories: If provided, only run checks in these categories.
-                        If None, run all checks.
+            categories: If provided, only run checks in these categories (Category
+                        enums, or their names/values as strings). If None/empty,
+                        run all checks.
+
+        Fail-closed contract (P0): a targeted diagnose() that runs ZERO checks — or
+        is handed an unknown category — emits a CRITICAL finding instead of
+        returning an empty result. An empty findings list makes is_demo_ready
+        vacuously True, which would hand any pipeline gate (e.g. the skeletal-asset
+        unlock) a green light from zero validation. Never silently pass nothing.
         """
         self._log("MVP Doctor: Starting diagnosis...")
         self._file_cache.clear()
         diagnosis = Diagnosis()
 
+        # Resolve requested categories; surface unknown ones as CRITICAL.
+        # `if categories:` (truthy) preserves the original "None or [] => run all".
+        resolved: list[Category] | None = None
+        if categories:
+            resolved = []
+            for c in categories:
+                cat_enum = _coerce_category(c)
+                if cat_enum is None:
+                    diagnosis.findings.append(Finding(
+                        id=f"UNKNOWN_CATEGORY_{str(c).upper().replace(' ', '_')}",
+                        title=f"Unknown diagnostic category requested: {c!r}",
+                        description=(
+                            f"diagnose() was asked to check {c!r}, which is not a valid "
+                            f"Category. Nothing was inspected for it. Reported CRITICAL "
+                            f"(fail-closed) so an unrecognized request can never read as "
+                            f"'demo ready'."
+                        ),
+                        severity=Severity.CRITICAL,
+                        category=Category.HEALTH_CHECK,
+                        fix_hint=f"Use a valid Category; got {c!r}",
+                    ))
+                else:
+                    resolved.append(cat_enum)
+
         for name, cat, func in _CHECK_REGISTRY:
-            if categories and cat not in categories:
+            if resolved is not None and cat not in resolved:
                 continue
 
             self._log(f"  Check: {name}")
@@ -1075,6 +1403,29 @@ print(json.dumps(_summary))
                     severity=Severity.LOW,
                     category=cat,
                 ))
+
+        # Fail-closed: caller targeted real categories but NOT ONE check ran for
+        # them — a CRITICAL unknown, never a silent pass. (Kills the
+        # diagnose(['ASSET']) vacuous is_demo_ready=True false-pass.) The run-all
+        # path (resolved is None) is never flagged.
+        if resolved and diagnosis.checks_run == 0:
+            labels = ", ".join(sorted(c.value for c in resolved))
+            diagnosis.findings.append(Finding(
+                id="NO_VALIDATOR_FOR_REQUESTED_CATEGORIES",
+                title=f"No validator registered for requested category set: {labels}",
+                description=(
+                    f"diagnose() ran ZERO checks for the requested categories ({labels}); "
+                    f"nothing was inspected. Reported CRITICAL (fail-closed) rather than a "
+                    f"silent pass — an empty check set must never make is_demo_ready vacuously "
+                    f"True. Register at least one @check(...) for the requested category."
+                ),
+                severity=Severity.CRITICAL,
+                category=resolved[0],
+                fix_hint=(
+                    "Register @check decorators for these categories in core/mvp_doctor.py "
+                    f"(e.g. @check('Skeletal Mesh Integrity', Category.{resolved[0].name}))"
+                ),
+            ))
 
         # Sort: CRITICAL first, then HIGH, etc.
         severity_order = {s: i for i, s in enumerate(Severity)}

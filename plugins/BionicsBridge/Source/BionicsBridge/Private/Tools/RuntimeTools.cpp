@@ -7,6 +7,7 @@
 #include "Tools/SetConsoleVarTool.h"
 #include "Tools/ExecuteConsoleCommandTool.h"
 #include "Tools/GetProjectInfoTool.h"
+#include "Tools/LogTailTool.h"
 
 #include "BionicsBridgeModule.h"
 #include "Engine/World.h"
@@ -14,9 +15,13 @@
 #include "GameFramework/Actor.h"
 #include "Kismet/GameplayStatics.h"
 #include "HAL/IConsoleManager.h"
+#include "HAL/FileManager.h"
+#include "HAL/PlatformFileManager.h"
+#include "Internationalization/Regex.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "Misc/App.h"
 #include "Misc/EngineVersion.h"
+#include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "UObject/SoftObjectPath.h"
 #include "UObject/UObjectIterator.h"
@@ -258,5 +263,159 @@ bool UGetProjectInfoTool::Execute(const TSharedPtr<FJsonObject>& Args,
 	OutResult->SetStringField(TEXT("content_dir"), FPaths::ProjectContentDir());
 	OutResult->SetStringField(TEXT("engine_dir"), FPaths::EngineDir());
 	OutResult->SetBoolField(TEXT("is_editor"), GIsEditor);
+	return true;
+}
+
+// ---- LogTailTool ----
+// Reads the active project log file from disk with seek-to-cursor for incremental
+// polling. UE writes Saved/Logs/<ProjectName>.log synchronously with FILE_SHARE_READ,
+// so disk-tailing is a clean pattern: no GLog hook, no buffer state to manage.
+//
+// Cursor protocol:
+//   - First call: pass since_cursor=0 → returns last min(file_size, max_bytes) bytes,
+//     drops partial first line if we seek'd into the middle of a line.
+//   - Subsequent calls: pass the returned cursor → returns only new bytes after cursor.
+//   - Log rotation: if since_cursor > current_file_size, treat as rotation and reset.
+//
+// Optional regex (UE FRegex, ECMAScript-ish syntax) is applied server-side.
+
+TSharedPtr<FJsonObject> ULogTailTool::GetInputSchema() const
+{
+	return MakeSchema({
+		{TEXT("since_cursor"), TEXT("integer")},
+		{TEXT("filter_regex"), TEXT("string")},
+		{TEXT("max_lines"),    TEXT("integer")},
+		{TEXT("max_bytes"),    TEXT("integer")},
+		{TEXT("log_path"),     TEXT("string")},
+	}, {});
+}
+
+bool ULogTailTool::Execute(const TSharedPtr<FJsonObject>& Args,
+                            TSharedPtr<FJsonObject>& OutResult, FString& OutError)
+{
+	const int32 SinceCursorInt = GetIntArg(Args, TEXT("since_cursor"), 0);
+	const int64 SinceCursor = FMath::Max((int64)SinceCursorInt, (int64)0);
+	const FString FilterRegex = GetStringArg(Args, TEXT("filter_regex"));
+	const int32 MaxLines = FMath::Clamp(GetIntArg(Args, TEXT("max_lines"), 500), 1, 10000);
+	const int64 MaxBytes = FMath::Clamp((int64)GetIntArg(Args, TEXT("max_bytes"), 1048576),
+	                                     (int64)1024, (int64)16 * 1024 * 1024);
+
+	FString LogFilePath = GetStringArg(Args, TEXT("log_path"));
+	if (LogFilePath.IsEmpty())
+	{
+		LogFilePath = FPaths::ProjectLogDir() / FString::Printf(TEXT("%s.log"), FApp::GetProjectName());
+	}
+	LogFilePath = FPaths::ConvertRelativePathToFull(LogFilePath);
+
+	IFileManager& FM = IFileManager::Get();
+	if (!FM.FileExists(*LogFilePath))
+	{
+		OutError = FString::Printf(TEXT("Log file not found: %s"), *LogFilePath);
+		return false;
+	}
+
+	const int64 FileSize = FM.FileSize(*LogFilePath);
+	if (FileSize < 0)
+	{
+		OutError = FString::Printf(TEXT("Could not stat log file: %s"), *LogFilePath);
+		return false;
+	}
+
+	// Resolve read range. Detect rotation: if cursor is beyond file size, file shrank → reset.
+	const bool bRotated = (SinceCursor > FileSize);
+	int64 ReadStart = SinceCursor;
+	if (bRotated || SinceCursor == 0)
+	{
+		ReadStart = (FileSize > MaxBytes) ? FileSize - MaxBytes : 0;
+	}
+	if (ReadStart > FileSize) ReadStart = FileSize;
+
+	const int64 Available = FileSize - ReadStart;
+	const int64 ReadLen = FMath::Min(Available, MaxBytes);
+	const int64 ReadEnd = ReadStart + ReadLen;
+	const bool bByteTruncated = (ReadEnd < FileSize);
+
+	if (ReadLen <= 0)
+	{
+		// Cursor caught up — no new content
+		OutResult = MakeShared<FJsonObject>();
+		TArray<TSharedPtr<FJsonValue>> Empty;
+		OutResult->SetArrayField(TEXT("lines"), Empty);
+		OutResult->SetNumberField(TEXT("cursor"), (double)FileSize);
+		OutResult->SetNumberField(TEXT("file_size"), (double)FileSize);
+		OutResult->SetNumberField(TEXT("line_count"), 0);
+		OutResult->SetBoolField(TEXT("truncated"), false);
+		OutResult->SetBoolField(TEXT("rotated"), bRotated);
+		OutResult->SetStringField(TEXT("log_path"), LogFilePath);
+		return true;
+	}
+
+	// FILEREAD_AllowWrite lets UE keep writing to the log while we read.
+	TUniquePtr<FArchive> Reader(FM.CreateFileReader(*LogFilePath, FILEREAD_AllowWrite));
+	if (!Reader)
+	{
+		OutError = FString::Printf(TEXT("Could not open log file: %s"), *LogFilePath);
+		return false;
+	}
+	Reader->Seek(ReadStart);
+	TArray<uint8> Buffer;
+	Buffer.SetNumUninitialized((int32)ReadLen + 1);
+	Reader->Serialize(Buffer.GetData(), ReadLen);
+	Buffer[(int32)ReadLen] = 0;
+	Reader->Close();
+
+	const FString Content = UTF8_TO_TCHAR((const ANSICHAR*)Buffer.GetData());
+
+	TArray<FString> Lines;
+	Content.ParseIntoArrayLines(Lines, /*InCullEmpty=*/false);
+
+	// If we seek'd into mid-file (initial call or rotation), the first line is partial.
+	// Drop it so the consumer never sees a half-truncated entry.
+	if ((SinceCursor == 0 || bRotated) && ReadStart > 0 && Lines.Num() > 0)
+	{
+		Lines.RemoveAt(0);
+	}
+
+	// Optional server-side regex filter
+	if (!FilterRegex.IsEmpty())
+	{
+		const FRegexPattern Pattern(FilterRegex);
+		TArray<FString> Filtered;
+		Filtered.Reserve(Lines.Num());
+		for (const FString& Line : Lines)
+		{
+			FRegexMatcher Matcher(Pattern, Line);
+			if (Matcher.FindNext())
+			{
+				Filtered.Add(Line);
+			}
+		}
+		Lines = MoveTemp(Filtered);
+	}
+
+	// Cap to max_lines (keep most recent)
+	bool bLineTruncated = false;
+	if (Lines.Num() > MaxLines)
+	{
+		const int32 DropCount = Lines.Num() - MaxLines;
+		Lines.RemoveAt(0, DropCount);
+		bLineTruncated = true;
+	}
+
+	TArray<TSharedPtr<FJsonValue>> LinesJson;
+	LinesJson.Reserve(Lines.Num());
+	for (const FString& Line : Lines)
+	{
+		LinesJson.Add(MakeShared<FJsonValueString>(Line));
+	}
+
+	OutResult = MakeShared<FJsonObject>();
+	OutResult->SetArrayField(TEXT("lines"), LinesJson);
+	OutResult->SetNumberField(TEXT("cursor"), (double)ReadEnd);
+	OutResult->SetNumberField(TEXT("file_size"), (double)FileSize);
+	OutResult->SetNumberField(TEXT("line_count"), Lines.Num());
+	OutResult->SetBoolField(TEXT("truncated"), bByteTruncated || bLineTruncated);
+	OutResult->SetBoolField(TEXT("rotated"), bRotated);
+	OutResult->SetStringField(TEXT("log_path"), LogFilePath);
 	return true;
 }

@@ -1,0 +1,35 @@
+{
+  "scan": {
+    "grade": "A",
+    "total_issues": 1,
+    "errors": 0,
+    "warnings": 0,
+    "infos": 1,
+    "auto_fixable": 0,
+    "issues": [
+      {
+        "index": 0,
+        "severity": "info",
+        "check_code": "UNUSED_VAR",
+        "asset_path": "/Game/SciFITrooper_Man_03/Blueprints/AnimBP/ABP_SciFiTrooperManV3.ABP_SciFiTrooperManV3",
+        "asset_name": "ABP_SciFiTrooperManV3",
+        "description": "AnimBP declares many variables but very few are read in the AnimGraph (heuristic). 54 properties, 2 graph reads.",
+        "node_hint": "54 properties with minimal graph reads",
+        "auto_fixable": false,
+        "how_to_fix": "1. Open the AnimBP > Class Defaults or My Blueprint panel\n2. Find the flagged variable\n3. Search for it in the AnimGraph (Ctrl+F)\n4. If truly unused, delete it from My Blueprint\n\nNOTE: Verify in editor \u2014 this check uses heuristics and may have false positives."
+      }
+    ]
+  },
+  "nullref": {
+    "filtered_count": 0,
+    "total_count": 1,
+    "grade": "A",
+    "issues": []
+  },
+  "errors": {
+    "filtered_count": 0,
+    "total_count": 1,
+    "grade": "A",
+    "issues": []
+  }
+}

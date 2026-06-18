@@ -13,6 +13,8 @@ Integrates with existing UE5 Python tools (animbp_doctor, etc.) as building bloc
 import json
 import logging
 import os
+import sys
+import traceback as _traceback
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +22,57 @@ from pathlib import Path
 from anthropic import Anthropic
 
 logger = logging.getLogger("bionics.auto_planner")
+
+# === Telemetry v2 (AAA logging) ===
+# v2 schema is event-driven: every divine_powers() run emits a sequence of
+# events (start, ecosystem_loaded, doctor_complete, plan_generated,
+# step_executed×N, divine_powers_end, outcome_recorded) sharing a run_id.
+# Old v1 entries (no schema_version field) remain readable; downstream
+# consumers should treat missing schema_version as "1.0.0".
+TELEMETRY_SCHEMA_VERSION = "2.0.0"
+TELEMETRY_PROMPT_MAX = 4096      # full-text prompt cap per event
+TELEMETRY_OUTPUT_MAX = 2048      # per-step stdout/stderr cap
+TELEMETRY_ERROR_MSG_MAX = 1024
+TELEMETRY_TRACEBACK_MAX = 4096
+TELEMETRY_SCRIPT_MAX = 8192      # per-step script_content cap (fine-tune payload)
+
+
+def _bionics_version() -> str:
+    """Read bionics version from pyproject.toml (safe-fail to 'unknown')."""
+    try:
+        import re
+        pp = Path(__file__).resolve().parent.parent / "pyproject.toml"
+        if pp.exists():
+            txt = pp.read_text(encoding="utf-8")
+            m = re.search(r'^version\s*=\s*"([^"]+)"', txt, re.MULTILINE)
+            if m:
+                return m.group(1)
+    except Exception:
+        pass
+    return "unknown"
+
+
+BIONICS_VERSION = _bionics_version()
+
+
+# === Shared telemetry writer integration (T1/shared/telemetry_writer.py) ===
+# Routes _telemetry_event calls through the shared TelemetryWriter so blend-master,
+# Bionics, and any future code-gen pipeline share one schema source of truth.
+# Falls open if the shared module isn't reachable — bionics keeps writing to its
+# existing JSONL via the original _telemetry_event code path.
+_SHARED_TELEMETRY_OK = False
+_SharedTelemetryWriter = None
+_shared_cost_row_fn = None
+try:
+    _shared_path = Path(__file__).resolve().parent.parent.parent / "shared"
+    if _shared_path.exists() and str(_shared_path) not in sys.path:
+        sys.path.insert(0, str(_shared_path))
+    from telemetry_writer import TelemetryWriter as _SharedTelemetryWriter
+    from telemetry_writer import cost_row as _shared_cost_row_fn
+    _SHARED_TELEMETRY_OK = True
+except Exception as _swe:
+    sys.stderr.write(f"[bionics telemetry] shared writer unavailable, "
+                     f"using local fallback: {_swe}\n")
 
 
 def _snake(name: str) -> str:
@@ -49,6 +102,7 @@ Given a user's request and research context, generate a Bionics execution plan i
 2. **ue5_api**: Use the UE5 Remote Control HTTP API for property get/set
 3. **vision**: Use screen vision + mouse/keyboard for UI interactions that can't be scripted
 4. **existing_script**: Run one of the user's existing Python tools in Content/Python/
+5. **bionics_tool**: Invoke a registered Bionics tool by name (set `bionics_tool` + `bionics_args`). PREFERRED for any task a proven tool already covers — these are fail-closed and live-verified, so never hand-write a script when a tool exists (see PREFERRED NATIVE BIONICS TOOLS in the research context)
 
 ## Output Format
 Return ONLY valid JSON:
@@ -61,9 +115,11 @@ Return ONLY valid JSON:
             "index": 1,
             "description": "Human-readable description",
             "detailed_instructions": "Exact instructions for Bionics to follow",
-            "execution_method": "ue5_python|ue5_api|vision|existing_script",
+            "execution_method": "ue5_python|ue5_api|vision|existing_script|bionics_tool",
             "script_content": "Python code to execute (for ue5_python method)",
             "existing_script": "filename.py (for existing_script method)",
+            "bionics_tool": "registered tool name (for bionics_tool method, e.g. ue5_uasvc_import_skeletal)",
+            "bionics_args": {"arg_name": "value (for bionics_tool method)"},
             "verification": "How to verify this step succeeded",
             "is_destructive": false,
             "requires_app": "Unreal Engine 5",
@@ -84,6 +140,7 @@ Return ONLY valid JSON:
 5. Include rollback strategy
 6. Break complex operations into atomic steps
 7. Reference specific file paths, class names, and property names from the research context
+8. For skeletal-mesh import use the `bionics_tool` ue5_uasvc_import_skeletal; for validating + rigging a humanoid use ue5_autorig_humanoid; for runtime-correct AnimGraph pin driving use ue5_drive_animgraph_pin_via_variable — these are fail-closed and live-proven, so do NOT hand-roll equivalent ue5_python scripts
 """
 
 
@@ -109,6 +166,17 @@ DIVINE_KNOWLEDGE_MAP = {
 }
 
 
+# Curated native-tool capabilities surfaced to the planner so it emits `bionics_tool`
+# steps instead of hand-rolling fragile scripts. Each wraps a live-proven, fail-closed flow
+# (2026-05-28 skeletal pipeline). Keep names in sync with bionics_tools/ue5_uasvc.py +
+# ue5_autorig.py + ue5_animgraph.py.
+PREFERRED_NATIVE_TOOLS = """PREFERRED NATIVE BIONICS TOOLS (emit execution_method="bionics_tool" with bionics_tool=<name> + bionics_args; do NOT hand-write equivalent scripts):
+  - ue5_uasvc_import_skeletal(file_path, asset_name, dest_path="/Game/Test/Skel"): import a .glb/.gltf/.fbx into a SkeletalMesh+Skeleton+PhysicsAsset. Fail-closed — errors if the source lands as a StaticMesh (skin not detected). Use for ANY skeletal mesh import.
+  - ue5_uasvc_preflight(): static check that the project's Interchange FBX flag allows skeletal FBX import. Run before importing an .fbx.
+  - ue5_autorig_humanoid(skeletal_mesh_path, ikrig_name="", ikrig_dest="/Game/Test/Skel"): validate a mesh as humanoid (23 Mannequin core bones) then build a 7-chain IKRig (the canon matching the game's IKRig_Mannequin/IKRig_SciFiTrooper, so retarget auto_map hits 7/7). Idempotent + fail-closed — refuses a non-humanoid mesh. Use for humanoid rigging.
+  - ue5_drive_animgraph_pin_via_variable(asset_path, variable_name, target_node_name, target_pin_name): runtime-correct AnimGraph pin driving (spawn+wire+compile). PREFER over bind_pin_to_property."""
+
+
 class AutoPlanner:
     """Converts natural language requests into executable Bionics plans.
 
@@ -132,6 +200,20 @@ class AutoPlanner:
         self._tool_index: dict[str, str] = {}
         self._bible_refs: list[dict] = []
         self._on_log: Callable[[str], None] | None = None
+        # Shared telemetry writer (None = falls through to local _telemetry_event impl)
+        self._tw = None
+        if _SHARED_TELEMETRY_OK and _SharedTelemetryWriter is not None:
+            try:
+                tel_dir = Path.home() / ".claude" / "telemetry" / "brain"
+                self._tw = _SharedTelemetryWriter(
+                    skill="bionics",
+                    version=BIONICS_VERSION,
+                    log_path=tel_dir / "bionics_runs.jsonl",
+                    version_field_name="bionics_version",
+                )
+            except Exception as e:
+                self._log(f"shared TelemetryWriter init failed (non-blocking): {e}")
+                self._tw = None
 
     def set_log_callback(self, callback: Callable[[str], None]):
         self._on_log = callback
@@ -534,6 +616,10 @@ class AutoPlanner:
             tool_list = "\n".join(f"  - {name}: {desc}" for name, desc in sorted(self._tool_index.items()))
             context_parts.append(f"EXISTING PYTHON TOOLS ({len(self._tool_index)} scripts in Content/Python/):\n{tool_list}")
 
+        # Native-first Bionics tools — steer the planner to fail-closed, proven flows
+        # (prefer these over hand-written scripts; dispatched via execution_method="bionics_tool")
+        context_parts.append(PREFERRED_NATIVE_TOOLS)
+
         # Local search results
         if local_results["scripts"]:
             scripts_text = ""
@@ -656,7 +742,198 @@ class AutoPlanner:
             "tool_count": len(self._tool_index),
         }
 
-    def _execute_plan_steps(self, plan: dict, bridge) -> list[dict]:
+    def _emit_step_event(self, run_id: str | None, step_idx, method: str,
+                          description: str, script: str, start_t: float,
+                          step_result: dict) -> None:
+        """Emit a step_executed telemetry event. No-op if run_id is None.
+
+        Captures the (state, action, result) tuple per step — this is the
+        fine-tune training payload. script_content is what the LLM produced;
+        output/error is the UE5 verdict.
+        """
+        if not run_id:
+            return
+        import time as _t
+        duration_ms = int((_t.time() - start_t) * 1000)
+        self._telemetry_event(
+            run_id, "step_executed",
+            step_n=step_idx,
+            method=method,
+            description=self._telemetry_truncate(description, 500),
+            script=self._telemetry_truncate(script, TELEMETRY_SCRIPT_MAX),
+            script_length=len(script or ""),
+            duration_ms=duration_ms,
+            success=step_result.get("success"),
+            output=self._telemetry_truncate(step_result.get("output", ""), TELEMETRY_OUTPUT_MAX),
+            error=self._telemetry_truncate(step_result.get("error", ""), TELEMETRY_ERROR_MSG_MAX),
+            note=step_result.get("note"),
+        )
+
+    def _invoke_bionics_tool(self, tool_name: str, args: dict) -> dict:
+        """Dispatch a registered @bionics_tool by name; normalize its ToolResult.
+
+        Lets a plan call native-first tools (ue5_uasvc_import_skeletal,
+        ue5_autorig_humanoid, ue5_drive_animgraph_pin_via_variable, ...) directly
+        instead of hand-rolling scripts. Mirrors the non-gated execution model of the
+        ue5_python path — plan execution is trusted, and a tool call is less dangerous
+        than the arbitrary Python that path already runs. Returns the standard
+        step-result shape {success, output, error, data}.
+        """
+        try:
+            from core.bridge import get_registry
+
+            spec = get_registry().get(tool_name)
+            if spec is None:
+                # Registry may not be populated yet (e.g. CLI entry) — populate once, retry.
+                # Guard: a register_all() failure must not mask the clean "unknown tool" result.
+                try:
+                    from bionics_tools import register_all
+
+                    register_all()
+                except Exception:
+                    pass
+                spec = get_registry().get(tool_name)
+            if spec is None:
+                return {"success": False, "error": f"Unknown bionics tool: {tool_name}"}
+            fn = getattr(spec, "fn", None)
+            if fn is None or not callable(fn):
+                return {"success": False, "error": f"Tool {tool_name} has no callable fn"}
+            result = fn(**(args or {}))
+            # Coroutine guard — registry tools may be async; resolve before reading fields.
+            import inspect as _inspect
+
+            if _inspect.iscoroutine(result):
+                import asyncio as _asyncio
+
+                result = _asyncio.run(result)
+            ok = getattr(result, "ok", None)
+            return {
+                "success": bool(ok) if ok is not None else None,
+                "output": (getattr(result, "content", "") or "")[:500],
+                "error": getattr(result, "error", "") or "",
+                "data": getattr(result, "data", None),
+            }
+        except TypeError as e:
+            return {"success": False, "error": f"bionics_tool {tool_name} arg mismatch: {e}"}
+        except Exception as e:  # noqa: BLE001 — surface any tool failure as a step error
+            return {"success": False, "error": f"bionics_tool {tool_name} raised: {e}"}
+
+    def _execute_python_step(
+        self, bridge, script: str, timeout_s: float = 60.0
+    ) -> tuple[bool, str, str]:
+        """Execute a plan step's Python in UE5 — native :8090 FIRST, RC fallback.
+
+        The native C++ :8090 bridge runs Python on the game thread and is NOT subject to the
+        RC HTTP "Object Default__PythonScriptLibrary cannot be accessed remotely" 400 that
+        blocks bridge.execute_python in UE5.7 (nor to the dead RC multicast discovery). So we
+        try native first via run_python_native (which wraps the script to capture
+        stdout/stderr + exceptions into a polled result JSON), and fall back to the RC
+        bridge.execute_python strategies ONLY when the native bridge is unreachable — so a
+        setup without the BionicsBridge plugin behaves exactly as before. Returns
+        (success, output_text, error).
+        """
+        # Native-first.
+        try:
+            from bionics_tools._ue5_native_exec import run_python_native
+            from bionics_tools.ue5_native import call_bridge_tool
+            native = run_python_native(script, timeout_s, invoke=call_bridge_tool)
+        except Exception as e:  # noqa: BLE001 — any native-path failure falls back to RC
+            native = {"reachable": False, "error": f"native exec path unavailable: {e}"}
+
+        if native.get("reachable"):
+            success = bool(native.get("success"))
+            output_text = (native.get("output") or "").strip()
+            error = (native.get("error") or "") if not success else ""
+            if not success and not error:
+                error = (
+                    "Native :8090 exec returned success=False with no error and no output "
+                    "(script may have evaluated to inert code)."
+                )
+            return success, output_text, error
+
+        # Fallback: RC bridge.execute_python (3-strategy). Preserves the v0.7.5 empty-error
+        # backstop so a silent RC failure still yields an observable diagnostic.
+        exec_result = bridge.execute_python(script)
+        output = (exec_result.data or {}).get("output", [])
+        if isinstance(output, list):
+            output_text = "\n".join(
+                ln.get("output", "") if isinstance(ln, dict) else str(ln)
+                for ln in output
+            ).strip()
+        else:
+            output_text = str(output)
+
+        if not exec_result.success and not exec_result.error:
+            if output_text:
+                error = (
+                    f"UE5 bridge returned success=False with no error message. "
+                    f"Captured output: {output_text[:300]}"
+                )
+            else:
+                error = (
+                    "UE5 bridge returned success=False with no error message and no output. "
+                    "Likely causes: script raised silently, bridge transport dropped the response, "
+                    "or script_content evaluated to inert code (no side effects)."
+                )
+        else:
+            error = exec_result.error if not exec_result.success else ""
+        return bool(exec_result.success), output_text, error
+
+    def _abi_gate_step(self, method: str, step: dict, script_content: str) -> dict | None:
+        """Static abi-guard pre-execution gate for ONE plan step (punch-list #4, 2026-05-30).
+
+        Runs core.abi_guard.analyze over the step's planned bridge call / script BEFORE it
+        executes and returns a fail-closed step-result dict if a BLOCK-level S7 violation
+        fires (e.g. a dead UE5.7 API like IKRetargetBatchOperationNameRule), or None if the
+        step is safe to execute.
+
+        Only the two project-mutating methods are gated — bionics_tool and ue5_python/python
+        — and only AFTER their callers have filtered C++ patch-hints, so a non-executed hint
+        is never blocked. WARN/INFO violations (e.g. bind_pin_to_property metadata-only) are
+        logged, never blocking. NEVER raises: an unavailable guard (ImportError) or any
+        analysis error returns None, so the gate can never freeze an otherwise-healthy plan.
+        """
+        try:
+            from core.abi_guard import analyze
+        except Exception:  # noqa: BLE001 — guard unavailable → don't block
+            return None
+
+        bridge_calls: list[dict] = []
+        if method == "bionics_tool" and step.get("bionics_tool"):
+            bridge_calls.append({
+                "tool": step["bionics_tool"],
+                "args": step.get("bionics_args", {}) or {},
+            })
+        elif method in ("ue5_python", "python") and script_content:
+            # Surface the script body as an arg so the S7.M dead-API scan fires on it.
+            bridge_calls.append({"tool": "ue5_python", "args": {"script": script_content}})
+        else:
+            return None
+
+        try:
+            report = analyze(plan=bridge_calls)
+        except Exception as e:  # noqa: BLE001 — analysis failure is non-fatal
+            self._log(f"  abi-guard analysis failed (non-fatal, proceeding): {e}")
+            return None
+
+        blocks = [v for v in report.violations if v.severity == "BLOCK"]
+        for v in report.violations:
+            if v.severity != "BLOCK":
+                self._log(f"  abi-guard [{v.severity}] {v.rule}: {v.message}")
+        if not blocks:
+            return None
+
+        msgs = "; ".join(f"{v.rule}: {v.message}" for v in blocks)
+        remedies = "; ".join(v.remedy for v in blocks if v.remedy)
+        self._log(f"  abi-guard BLOCK — refusing to execute step: {msgs}")
+        return {
+            "success": False,
+            "output": "",
+            "error": f"abi-guard BLOCK: {msgs}" + (f" Remedy: {remedies}" if remedies else ""),
+            "note": "abi_guard pre-execution gate blocked this step",
+        }
+
+    def _execute_plan_steps(self, plan: dict, bridge, run_id: str | None = None) -> list[dict]:
         """Execute Python/script steps from a plan via UE5 bridge.
 
         Shared execution logic used by generate_and_execute, diagnose_plan_execute,
@@ -673,12 +950,19 @@ class AutoPlanner:
         success=False with an empty error string, the result['error'] field is
         synthesized from the output text so the operator has SOME signal about
         why the step failed, instead of an unobservable silent failure.
+
+        Telemetry v2: when run_id is provided, emits a step_executed event per
+        step capturing method, description, script (capped), output, error,
+        and duration. This is the fine-tune training payload.
         """
+        import time as _step_time
         results = []
         for step in plan.get("steps", []):
             method = step.get("execution_method", "")
             idx = step.get("index", "?")
             description = step.get("description", "") or ""
+            _step_start = _step_time.time()
+            _step_script = step.get("script_content", "") or step.get("existing_script", "") or ""
 
             if method == "ue5_python" and step.get("script_content"):
                 script_content = step["script_content"]
@@ -719,42 +1003,34 @@ class AutoPlanner:
                         "output": "",
                         "note": note,
                     })
+                    self._emit_step_event(run_id, idx, method, description,
+                                           _step_script, _step_start, results[-1])
                     continue
 
-                self._log(f"Step {idx}: Executing Python in UE5...")
-                exec_result = bridge.execute_python(script_content)
-                output = exec_result.data.get("output", [])
-                if isinstance(output, list):
-                    output_text = "\n".join(
-                        l.get("output", "") if isinstance(l, dict) else str(l)
-                        for l in output
-                    ).strip()
-                else:
-                    output_text = str(output)
-                self._log(f"Step {idx}: {'OK' if exec_result.success else 'FAIL'} - {output_text[:200]}")
+                # abi-guard pre-execution gate — fail-closed on BLOCK-level S7 violations
+                # (e.g. a dead UE5.7 API in the script). Runs AFTER patch-hint filtering so
+                # a non-executed C++ hint is never blocked. Never raises.
+                _abi_block = self._abi_gate_step(method, step, script_content)
+                if _abi_block is not None:
+                    results.append({"step": idx, **_abi_block})
+                    self._emit_step_event(run_id, idx, method, description,
+                                           _step_script, _step_start, results[-1])
+                    continue
 
-                # v0.7.5 empty-error backstop
-                if not exec_result.success and not exec_result.error:
-                    if output_text:
-                        synthesized_error = (
-                            f"UE5 bridge returned success=False with no error message. "
-                            f"Captured output: {output_text[:300]}"
-                        )
-                    else:
-                        synthesized_error = (
-                            "UE5 bridge returned success=False with no error message and no output. "
-                            "Likely causes: script raised silently, bridge transport dropped the response, "
-                            "or script_content evaluated to inert code (no side effects)."
-                        )
-                else:
-                    synthesized_error = exec_result.error if not exec_result.success else ""
+                self._log(f"Step {idx}: Executing Python in UE5 (native :8090 first)...")
+                step_success, output_text, synthesized_error = self._execute_python_step(
+                    bridge, script_content
+                )
+                self._log(f"Step {idx}: {'OK' if step_success else 'FAIL'} - {output_text[:200]}")
 
                 results.append({
                     "step": idx,
-                    "success": exec_result.success,
+                    "success": step_success,
                     "output": output_text[:500],
                     "error": synthesized_error,
                 })
+                self._emit_step_event(run_id, idx, method, description,
+                                       _step_script, _step_start, results[-1])
 
             elif method == "existing_script" and step.get("existing_script"):
                 # Basename-enforce script_name to block path traversal — Claude-generated
@@ -765,19 +1041,48 @@ class AutoPlanner:
                 else:
                     self._log(f"Step {idx}: No project path set — can't run {script_name}")
                     results.append({"step": idx, "success": False, "error": "No project path"})
+                    self._emit_step_event(run_id, idx, method, description,
+                                           _step_script, _step_start, results[-1])
                     continue
-                self._log(f"Step {idx}: Running {script_name}...")
-                exec_result = bridge.execute_python(f"exec(open(r'{script_path}').read())")
+                self._log(f"Step {idx}: Running {script_name} (native :8090 first)...")
+                step_success, _output_text, step_error = self._execute_python_step(
+                    bridge, f"exec(open(r'{script_path}').read())"
+                )
                 results.append({
                     "step": idx,
-                    "success": exec_result.success,
+                    "success": step_success,
                     "script": script_name,
-                    "error": exec_result.error if not exec_result.success else "",
+                    "error": step_error,
                 })
+                self._emit_step_event(run_id, idx, method, description,
+                                       _step_script, _step_start, results[-1])
+
+            elif method == "bionics_tool" and step.get("bionics_tool"):
+                tool_name = step["bionics_tool"]
+                tool_args = step.get("bionics_args", {}) or {}
+                # abi-guard pre-execution gate — fail-closed on BLOCK-level S7 violations
+                # (e.g. a dead UE5.7 API referenced in the tool args). Never raises.
+                _abi_block = self._abi_gate_step(method, step, "")
+                if _abi_block is not None:
+                    results.append({"step": idx, **_abi_block})
+                    self._emit_step_event(run_id, idx, method, description,
+                                           _step_script, _step_start, results[-1])
+                    continue
+                self._log(f"Step {idx}: Invoking native tool {tool_name}...")
+                tool_res = self._invoke_bionics_tool(tool_name, tool_args)
+                self._log(
+                    f"Step {idx}: {'OK' if tool_res.get('success') else 'FAIL'} - "
+                    f"{str(tool_res.get('output') or tool_res.get('error'))[:200]}"
+                )
+                results.append({"step": idx, **tool_res})
+                self._emit_step_event(run_id, idx, method, description,
+                                       _step_script, _step_start, results[-1])
 
             else:
                 self._log(f"Step {idx}: {method} requires Bionics agent")
                 results.append({"step": idx, "success": None, "note": f"Method '{method}' requires Bionics agent"})
+                self._emit_step_event(run_id, idx, method, description,
+                                       _step_script, _step_start, results[-1])
 
         passed = sum(1 for r in results if r.get("success") is True)
         self._log(f"Execution: {passed}/{len(results)} steps passed")
@@ -882,47 +1187,247 @@ class AutoPlanner:
     # and integration failures never block divine_powers() execution.
     # =====================================================================
 
-    def _bionics_telemetry_start(self, topic: str, prompt: str) -> str:
-        """Log divine_powers() run start to Bionics telemetry JSONL.
+    # =====================================================================
+    # Telemetry v2 — event-driven, AAA logging
+    #
+    # All writes go to ~/.claude/telemetry/brain/bionics_runs.jsonl as
+    # append-only JSON lines. Each line carries schema_version, ts, run_id,
+    # event, plus event-specific fields. SAFE TO FAIL — telemetry never
+    # blocks divine_powers() execution.
+    # =====================================================================
 
-        Writes to ~/.claude/telemetry/brain/bionics_runs.jsonl (additive — does
-        NOT pollute Brain's decisions.jsonl). Returns a run_id for the end call.
+    @staticmethod
+    def _telemetry_truncate(s, n: int):
+        """Cap a payload string with a clear marker. Returns '' for None."""
+        if s is None:
+            return ""
+        s = s if isinstance(s, str) else json.dumps(s, default=str)
+        if len(s) <= n:
+            return s
+        return s[:n] + f"...[truncated {len(s) - n} chars]"
+
+    def _telemetry_event(self, run_id: str, event: str, **payload) -> bool:
+        """Append a v2 telemetry event to bionics_runs.jsonl.
+
+        Returns True on success, False on failure. Never raises.
+
+        Delegates to the shared TelemetryWriter when available (single schema
+        source of truth across blend-master + Bionics). Falls back to the local
+        writer below if shared is unreachable — bionics keeps working either way.
         """
-        run_id = f"bionics_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        if self._tw is not None:
+            return self._tw.event(run_id, event, **payload)
+        # Fallback: local writer (preserved for shared-unavailable scenarios)
         try:
             tel_dir = Path.home() / ".claude" / "telemetry" / "brain"
             tel_dir.mkdir(parents=True, exist_ok=True)
             entry = {
+                "schema_version": TELEMETRY_SCHEMA_VERSION,
                 "ts": datetime.now().isoformat(),
                 "run_id": run_id,
-                "event": "divine_powers_start",
-                "topic": topic,
-                "prompt_head": prompt[:100],
+                "event": event,
+                "pid": os.getpid(),
+                "bionics_version": BIONICS_VERSION,
             }
-            with open(tel_dir / "bionics_runs.jsonl", "a", encoding="utf-8") as f:
-                f.write(json.dumps(entry) + "\n")
+            entry.update(payload)
+            path = tel_dir / "bionics_runs.jsonl"
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, default=str) + "\n")
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except OSError:
+                    pass  # fsync unsupported on some FS; best-effort
+            return True
         except Exception as e:
-            self._log(f"Telemetry start failed (non-blocking): {e}")
+            self._log(f"Telemetry event '{event}' failed (non-blocking): {e}")
+            return False
+
+    # === Bionics-specific auto-scoring (parallel to blend-master's mesh-quality scorer) ===
+    # Computes pass/partial/fail verdict from divine_powers run results so the
+    # JSONL training corpus has a supervision label for fine-tune. Different
+    # checks than blend-master (which scores mesh quality); bionics scores
+    # code-gen execution quality.
+    _BIONICS_DURATION_BUDGET_MS = 120000   # 2-minute soft ceiling per divine_powers
+    _BIONICS_FINDINGS_NOISE_THRESHOLD = 5  # > this many doctor findings = noisy
+
+    def _bionics_compute_auto_score(self, *, success: bool, duration_ms: int,
+                                      findings: int, steps_executed: int,
+                                      steps_succeeded: int,
+                                      error_type: str | None) -> dict:
+        """Compute (score, reasons, verdict, checks) for a divine_powers run.
+
+        Score formula matches blend-master's auto_score.py shape so Hesper
+        and the fine-tune dataset builder can mine both pipelines uniformly.
+
+        Critical-check fails (cost 0.30 each):
+          - bionics_no_exception        — error_type is None
+          - bionics_all_steps_succeeded — steps_succeeded == steps_executed
+
+        Other-check fails (cost 0.15 each):
+          - bionics_findings_under_noise — findings < _BIONICS_FINDINGS_NOISE_THRESHOLD
+          - bionics_under_duration_budget — duration_ms < _BIONICS_DURATION_BUDGET_MS
+          - bionics_run_marked_success    — success == True
+
+        Verdict thresholds:
+          - pass    : score ≥ 0.85 AND no critical fail AND success
+          - partial : score ≥ 0.50
+          - fail    : score < 0.50
+        """
+        checks = {
+            "bionics_no_exception": error_type is None,
+            "bionics_all_steps_succeeded": (
+                steps_executed > 0 and steps_succeeded == steps_executed
+            ),
+            "bionics_findings_under_noise": findings < self._BIONICS_FINDINGS_NOISE_THRESHOLD,
+            "bionics_under_duration_budget": duration_ms < self._BIONICS_DURATION_BUDGET_MS,
+            "bionics_run_marked_success": bool(success),
+        }
+        critical_keys = ("bionics_no_exception", "bionics_all_steps_succeeded")
+
+        score = 1.0
+        for k, v in checks.items():
+            if v is False:
+                score -= 0.30 if k in critical_keys else 0.15
+        score = max(0.0, min(1.0, score))
+
+        passes = [k for k, v in checks.items() if v is True]
+        fails = [f"FAIL:{k}" for k, v in checks.items() if v is False]
+        reasons = passes + fails
+
+        critical_fail = any(checks[k] is False for k in critical_keys)
+        if score >= 0.85 and not critical_fail and success:
+            verdict = "pass"
+        elif score >= 0.50:
+            verdict = "partial"
+        else:
+            verdict = "fail"
+
+        return {
+            "score": round(score, 3),
+            "reasons": reasons,
+            "verdict": verdict,
+            "checks": checks,
+        }
+
+    # === Cost-row mirror (Aurora ROI signal for bionics divine_powers runs) ===
+    # Bionics uses the Claude API for planning + per-step generation. Without
+    # per-call token metering yet, conservative would-have-cost estimate is
+    # ~$0.05 for a typical multi-step UE5 automation plan (much heavier than
+    # blend-master's single-script bpy gen at $0.012). Refine when bionics
+    # ships orchestrator-level token telemetry to compare against.
+    _BIONICS_RUN_SAVINGS_USD = 0.05
+
+    def _emit_cost_row(self, run_id: str, success: bool, total_duration_ms: int,
+                        actual_cost_usd: float = 0.0) -> bool:
+        """Mirror this divine_powers run to cost_efficiency.jsonl (Aurora-ready).
+
+        actual_cost_usd defaults to 0.0 until bionics ships per-call API
+        metering; would_have_cost_usd is the conservative savings claim.
+        """
+        if not (_SHARED_TELEMETRY_OK and _shared_cost_row_fn is not None):
+            return False
+        try:
+            return _shared_cost_row_fn(
+                agent="bionics_planner",
+                run_id=run_id,
+                skill="bionics",
+                tier="S3",  # divine_powers is S3-tier multi-step planning
+                budget_usd=0.50,  # would-be Claude API ceiling per godspeed v4.10
+                actual_cost_usd=float(actual_cost_usd),
+                would_have_cost_usd=self._BIONICS_RUN_SAVINGS_USD if success else 0.0,
+                iterations=1,
+                verdict="pass" if success else "fail",
+                breach=False,
+                extra={
+                    "duration_ms": int(total_duration_ms or 0),
+                    "model": self._model,
+                },
+            )
+        except Exception as e:
+            self._log(f"cost_row failed (non-blocking): {e}")
+            return False
+
+    def _bionics_telemetry_start(self, topic: str, prompt: str,
+                                  topics_all: list | None = None,
+                                  bridge=None) -> str:
+        """Emit divine_powers_start event. Returns the run_id.
+
+        v2 schema captures: full prompt (capped), all detected topics,
+        project_path, bridge connection state, model, bionics version.
+        """
+        run_id = f"bionics_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+        prompt_str = prompt or ""
+        self._telemetry_event(
+            run_id, "divine_powers_start",
+            topic_primary=topic,
+            topics=list(topics_all) if topics_all else [topic],
+            prompt=self._telemetry_truncate(prompt_str, TELEMETRY_PROMPT_MAX),
+            prompt_length=len(prompt_str),
+            project_path=str(self._project_path) if self._project_path else None,
+            bridge_connected=bool(
+                bridge is not None and getattr(bridge, "is_connected", False)
+            ),
+            model=self._model,
+        )
         return run_id
 
     def _bionics_telemetry_end(self, run_id: str, success: bool,
-                                duration_ms: int, findings: int, steps: int) -> None:
-        """Log divine_powers() run completion to bionics_runs.jsonl."""
+                                duration_ms: int, findings: int, steps: int,
+                                *,
+                                doctor_ms: int = 0, plan_ms: int = 0,
+                                exec_ms: int = 0, steps_succeeded: int = 0,
+                                error_type: str | None = None,
+                                error_message: str | None = None,
+                                error_traceback: str | None = None) -> None:
+        """Emit divine_powers_end event with timing breakdown + error info.
+
+        Backward-compatible: existing positional call sites still work.
+        New kwargs add timing breakdown and exception detail when available.
+        """
+        # Auto-score the run BEFORE emitting end event (so the order is
+        # ... step events ... auto_scored ... divine_powers_end).
+        # Supervision label for fine-tune training pairs.
         try:
-            tel_dir = Path.home() / ".claude" / "telemetry" / "brain"
-            entry = {
-                "ts": datetime.now().isoformat(),
-                "run_id": run_id,
-                "event": "divine_powers_end",
-                "success": success,
-                "duration_ms": duration_ms,
-                "findings": findings,
-                "steps_executed": steps,
-            }
-            with open(tel_dir / "bionics_runs.jsonl", "a", encoding="utf-8") as f:
-                f.write(json.dumps(entry) + "\n")
-        except Exception as e:
-            self._log(f"Telemetry end failed (non-blocking): {e}")
+            _as = self._bionics_compute_auto_score(
+                success=success, duration_ms=duration_ms,
+                findings=findings, steps_executed=steps,
+                steps_succeeded=steps_succeeded, error_type=error_type,
+            )
+            if self._tw is not None:
+                self._tw.emit_auto_score(
+                    run_id, _as["score"], _as["reasons"],
+                    verdict=_as["verdict"], checks=_as["checks"],
+                )
+            else:
+                self._telemetry_event(
+                    run_id, "auto_scored",
+                    auto_score=_as["score"],
+                    auto_score_reasons=_as["reasons"],
+                    verdict=_as["verdict"],
+                    checks=_as["checks"],
+                )
+        except Exception as _ase:
+            self._log(f"bionics auto_score failed (non-blocking): {_ase}")
+
+        self._telemetry_event(
+            run_id, "divine_powers_end",
+            success=success,
+            total_duration_ms=duration_ms,
+            timing={
+                "doctor_ms": doctor_ms,
+                "plan_ms": plan_ms,
+                "exec_ms": exec_ms,
+            },
+            findings=findings,
+            steps_executed=steps,
+            steps_succeeded=steps_succeeded,
+            error_type=error_type,
+            error_message=self._telemetry_truncate(error_message, TELEMETRY_ERROR_MSG_MAX) if error_message else None,
+            error_traceback=self._telemetry_truncate(error_traceback, TELEMETRY_TRACEBACK_MAX) if error_traceback else None,
+        )
+        # Mirror to cost_efficiency.jsonl (Aurora ROI signal)
+        self._emit_cost_row(run_id, success=success, total_duration_ms=duration_ms)
 
     def _session_state_update(self, phase: str, topic: str = "") -> None:
         """Update ~/.claude/session_state.json so statusline/monitors see Bionics activity.
@@ -1075,7 +1580,14 @@ class AutoPlanner:
         Writes two records:
           1. memory[task_outcome / topic / run_id] = {full run summary}
           2. tool_cache[topic, prompt, sequence] = records the plan's tool calls
+
+        Telemetry v2: also emits outcome_recorded event with the success flags
+        of both writes so downstream consumers can verify persistence.
         """
+        _memory_ok = False
+        _memory_err = None
+        _cache_ok = False
+        _cache_err = None
         try:
             from core.memory import get_memory
             mem = get_memory()
@@ -1089,7 +1601,9 @@ class AutoPlanner:
                 "duration_ms": duration_ms,
                 "success": success,
             })
+            _memory_ok = True
         except Exception as e:
+            _memory_err = str(e)
             self._log(f"Memory write failed (non-blocking): {e}")
 
         # Voyager cache — compact sequence summary
@@ -1110,8 +1624,21 @@ class AutoPlanner:
                 cache.record(topic, prompt, sequence,
                              success=success, duration_ms=duration_ms,
                              confidence=1.0 if success else 0.3)
+                _cache_ok = True
+            else:
+                _cache_ok = True  # nothing to record, count as OK
         except Exception as e:
+            _cache_err = str(e)
             self._log(f"Tool cache record failed (non-blocking): {e}")
+
+        # Telemetry v2: outcome_recorded — durable-write confirmation
+        self._telemetry_event(
+            run_id, "outcome_recorded",
+            memory_write_ok=_memory_ok,
+            memory_error=self._telemetry_truncate(_memory_err, 500) if _memory_err else None,
+            tool_cache_write_ok=_cache_ok,
+            tool_cache_error=self._telemetry_truncate(_cache_err, 500) if _cache_err else None,
+        )
 
     def divine_powers(self, prompt: str, bridge=None) -> dict:
         """The unified divine powers pipeline.
@@ -1143,7 +1670,10 @@ class AutoPlanner:
 
         # --- Phase 3 wiring: telemetry start + session state + ecosystem context ---
         _primary_topic = topic_names[0] if topic_names else "GENERAL"
-        _run_id = self._bionics_telemetry_start(_primary_topic, prompt)
+        _run_id = self._bionics_telemetry_start(
+            _primary_topic, prompt,
+            topics_all=topic_names, bridge=bridge,
+        )
         self._session_state_update("running", _primary_topic)
 
         # Load canonical engine context for the planner (additive — never blocks)
@@ -1161,18 +1691,61 @@ class AutoPlanner:
         elif _warm_start["similar"]:
             self._log(f"Voyager cache: {len(_warm_start['similar'])} similar runs (below proven threshold)")
 
+        # Telemetry v2: emit ecosystem_loaded — captures which KB layers + cache
+        # state shaped this run. Critical for downstream root-cause analysis.
+        self._telemetry_event(
+            _run_id, "ecosystem_loaded",
+            author_chain=_author_chain or [],
+            ue_kb_zones=list(_ue_kb_context.keys()) if _ue_kb_context else [],
+            ue_kb_bytes=sum(len(v or "") for v in (_ue_kb_context or {}).values()),
+            voyager_proven_count=len(_warm_start.get("proven", [])),
+            voyager_similar_count=len(_warm_start.get("similar", [])),
+        )
+
         _success = False
         _findings_count = 0
         _steps_count = 0
+        _steps_succeeded = 0
+        _doctor_ms = 0
+        _plan_ms = 0
+        _exec_ms = 0
+        _error_type = None
+        _error_message = None
+        _error_traceback = None
         try:
             # Step 2: Run Doctor with targeted checks
+            _doctor_start = _time.time()
             doctor = MVPDoctor(
                 ue5_project_path=str(self._project_path) if self._project_path else "",
                 ue5_bridge=bridge,
             )
             diagnosis = doctor.diagnose(categories=topics)
+            _doctor_ms = int((_time.time() - _doctor_start) * 1000)
             self._log(diagnosis.summary())
             _findings_count = len(diagnosis.findings) if hasattr(diagnosis, "findings") else 0
+
+            # Telemetry v2: doctor_complete — findings + unfixed + demo_ready
+            _findings_summary = []
+            if hasattr(diagnosis, "findings"):
+                for _f in (diagnosis.findings or [])[:20]:
+                    _findings_summary.append({
+                        "category": str(getattr(_f, "category", "") or ""),
+                        "severity": str(getattr(_f, "severity", "") or ""),
+                        "issue": self._telemetry_truncate(
+                            str(getattr(_f, "issue", "")
+                                or getattr(_f, "message", "")
+                                or getattr(_f, "description", "")),
+                            300,
+                        ),
+                    })
+            self._telemetry_event(
+                _run_id, "doctor_complete",
+                duration_ms=_doctor_ms,
+                findings_count=_findings_count,
+                unfixed_count=len(diagnosis.unfixed) if hasattr(diagnosis, "unfixed") else 0,
+                demo_ready=bool(getattr(diagnosis, "is_demo_ready", False)),
+                findings_summary=_findings_summary,
+            )
 
             # Step 3: Generate plan with enriched ecosystem context
             doctor_prompt = diagnosis.to_planner_prompt()
@@ -1196,18 +1769,46 @@ class AutoPlanner:
                 f"authoritative engine reference. Prioritize what the user asked for."
             )
 
+            _plan_start = _time.time()
+            _deep_research_used = bool(diagnosis.unfixed)
             if diagnosis.unfixed:
                 self._log(f"Doctor found {len(diagnosis.unfixed)} issues - generating fix plan...")
                 plan_result = self.generate_plan(combined_prompt, deep_research=True, divine=True)
             else:
                 self._log("Doctor found no issues - generating plan from prompt only...")
                 plan_result = self.generate_plan(prompt, deep_research=False, divine=True)
+            _plan_ms = int((_time.time() - _plan_start) * 1000)
 
-            # Step 4: Execute (if bridge available)
+            # Telemetry v2: plan_generated — plan-step summary (the action set)
+            _plan_steps = ((plan_result or {}).get("plan") or {}).get("steps", []) or []
+            _plan_summary = [
+                {
+                    "step_n": s.get("index", i + 1),
+                    "method": s.get("execution_method"),
+                    "description": self._telemetry_truncate(s.get("description", ""), 200),
+                    "has_script": bool(s.get("script_content") or s.get("existing_script")),
+                }
+                for i, s in enumerate(_plan_steps[:50])
+            ]
+            self._telemetry_event(
+                _run_id, "plan_generated",
+                duration_ms=_plan_ms,
+                plan_path=plan_result.get("plan_path"),
+                step_count=len(_plan_steps),
+                deep_research=_deep_research_used,
+                plan_summary=_plan_summary,
+            )
+
+            # Step 4: Execute (if bridge available) — emits step_executed per step
             execution_results = []
             if bridge is not None and bridge.is_connected:
-                execution_results = self._execute_plan_steps(plan_result.get("plan", {}), bridge)
+                _exec_start = _time.time()
+                execution_results = self._execute_plan_steps(
+                    plan_result.get("plan", {}), bridge, run_id=_run_id,
+                )
+                _exec_ms = int((_time.time() - _exec_start) * 1000)
             _steps_count = len(execution_results)
+            _steps_succeeded = sum(1 for r in execution_results if r.get("success") is True)
             _success = True
 
             return {
@@ -1225,11 +1826,24 @@ class AutoPlanner:
                     "voyager_warm_start": _warm_start,
                 },
             }
+        except Exception as _exc:
+            # Capture exception detail for the end event, then re-raise so
+            # callers still see the failure. SAFE: telemetry write is best-effort.
+            _error_type = type(_exc).__name__
+            _error_message = str(_exc)
+            _error_traceback = _traceback.format_exc()
+            raise
         finally:
             # Telemetry end + session state clear fires on every exit path
             _duration_ms = int((_time.time() - _start_time) * 1000)
-            self._bionics_telemetry_end(_run_id, _success, _duration_ms,
-                                         _findings_count, _steps_count)
+            self._bionics_telemetry_end(
+                _run_id, _success, _duration_ms,
+                _findings_count, _steps_count,
+                doctor_ms=_doctor_ms, plan_ms=_plan_ms, exec_ms=_exec_ms,
+                steps_succeeded=_steps_succeeded,
+                error_type=_error_type, error_message=_error_message,
+                error_traceback=_error_traceback,
+            )
             self._session_state_update("idle", _primary_topic)
 
             # Phase 4 wiring: persist outcome to memory + Voyager cache
