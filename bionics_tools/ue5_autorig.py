@@ -482,3 +482,229 @@ def ue5_autorig_humanoid(
         data=payload,
         error=reason,
     )
+
+
+# ============================================================================
+# Standalone bone validator (punch-list #2, 2026-05-30) — the AssetDoctor :8090 half,
+# decoupled from rig-building so a skeleton can be validated WITHOUT the IKRig side-effect.
+# Same proven get_bones + 23-bone MANNEQUIN_CORE fail-closed check as ue5_autorig_humanoid,
+# minus the IKRig section. read_only/SAFE. Surfaced to MVPDoctor as a Category.ASSET @check
+# so bone integrity gates demo_ready instead of running only when a plan emits an autorig step.
+# ============================================================================
+
+_VALIDATE_MARKER = "BIONICS_VALIDATE_RESULT"
+
+# Validate-ONLY UE5-side script: the get_bones 4-method enumerator + MANNEQUIN_CORE humanoid
+# gate from _VALIDATE_AND_RIG_SCRIPT, with NO IKRig creation. Writes {ok, humanoid, bones, errors}.
+_VALIDATE_ONLY_SCRIPT = r'''
+import json
+import traceback
+
+import unreal
+
+PARAMS_PATH = r"__PARAMS_PATH__"
+RESULT_PATH = r"__RESULT_PATH__"
+with open(PARAMS_PATH) as _pf:
+    _p = json.load(_pf)
+SK_MESH = _p["skeletal_mesh_path"]
+
+MANNEQUIN_CORE = [
+    "root", "pelvis", "spine_01", "spine_02", "spine_03", "neck_01", "head",
+    "clavicle_l", "upperarm_l", "lowerarm_l", "hand_l",
+    "clavicle_r", "upperarm_r", "lowerarm_r", "hand_r",
+    "thigh_l", "calf_l", "foot_l", "ball_l",
+    "thigh_r", "calf_r", "foot_r", "ball_r",
+]
+
+RES = {"ok": False, "stage": "init", "bones": {}, "errors": []}
+
+
+def get_bones(mesh):
+    """Bone-name extraction — Method 0 (transient SkeletalMeshComponent) is the only one that
+    works in UE5.7; the others are 5.x fallbacks. VERBATIM from ue5_autorig_humanoid's seed."""
+    try:
+        comp = unreal.SkeletalMeshComponent()
+        if hasattr(comp, "set_skeletal_mesh_asset"):
+            comp.set_skeletal_mesh_asset(mesh)
+        else:
+            comp.set_editor_property("skeletal_mesh_asset", mesh)
+        n = comp.get_num_bones()
+        b = [str(comp.get_bone_name(i)) for i in range(n)]
+        if b:
+            return b, "SkeletalMeshComponent"
+    except Exception as e:  # noqa: BLE001
+        RES["errors"].append("bones m0: " + str(e))
+    try:
+        lib = getattr(unreal, "EditorSkeletalMeshLibrary", None)
+        if lib and hasattr(lib, "get_all_bone_names"):
+            b = [str(x) for x in (lib.get_all_bone_names(mesh) or [])]
+            if b:
+                return b, "EditorSkeletalMeshLibrary"
+    except Exception as e:  # noqa: BLE001
+        RES["errors"].append("bones m1: " + str(e))
+    try:
+        bt = mesh.skeleton.get_editor_property("bone_tree")
+        b = [str(x.name) if hasattr(x, "name") else str(x) for x in (bt or [])]
+        if b:
+            return b, "bone_tree"
+    except Exception as e:  # noqa: BLE001
+        RES["errors"].append("bones m2: " + str(e))
+    try:
+        ref = mesh.skeleton.get_reference_pose()
+        b = [str(x.name) for x in ref.get_editor_property("bone_info")]
+        if b:
+            return b, "reference_pose"
+    except Exception as e:  # noqa: BLE001
+        RES["errors"].append("bones m3: " + str(e))
+    return [], None
+
+
+def run():
+    RES["stage"] = "load"
+    mesh = unreal.load_asset(SK_MESH)
+    if not isinstance(mesh, unreal.SkeletalMesh):
+        RES["errors"].append(f"{SK_MESH} is not a SkeletalMesh")
+        return
+
+    RES["stage"] = "validate_bones"
+    bones, method = get_bones(mesh)
+    RES["bones"] = {"count": len(bones), "method": method, "actual": bones[:60]}
+    if not bones:
+        RES["errors"].append("bone extraction failed all 4 methods — FAIL-CLOSED (cannot validate)")
+        return
+    present = set(bones)
+    missing = [b for b in MANNEQUIN_CORE if b not in present]
+    RES["bones"]["mannequin_missing"] = missing
+    RES["bones"]["humanoid"] = not missing
+    if missing:
+        RES["errors"].append(
+            f"missing {len(missing)}/{len(MANNEQUIN_CORE)} Mannequin core bones {missing[:10]} "
+            "— not a valid humanoid (FAIL-CLOSED)"
+        )
+        return
+    RES["ok"] = True
+    RES["stage"] = "done"
+
+
+try:
+    run()
+except Exception as e:  # noqa: BLE001
+    RES["errors"].append(str(e))
+    RES["traceback"] = traceback.format_exc()
+
+with open(RESULT_PATH, "w") as f:
+    json.dump(RES, f, indent=2)
+
+unreal.log(
+    f"BIONICS_VALIDATE_RESULT: ok={RES['ok']} humanoid={RES['bones'].get('humanoid')} "
+    f"bones={RES['bones'].get('count')}"
+)
+'''
+
+
+def _resolve_validate_scratch_dir() -> Path | None:
+    """Scratch dir for the validate handshake files — module-level seam so unit tests can
+    patch ue5_autorig._resolve_validate_scratch_dir."""
+    return resolve_scratch_dir("validate")
+
+
+def _fire_and_poll_validate(
+    script_path: Path,
+    result_path: Path,
+    timeout_s: float,
+    poll_interval_s: float = 0.5,
+) -> tuple[ToolResult | None, dict | None]:
+    """Fire the validate-only script over :8090 and poll its result JSON. ``call_bridge_tool``
+    is passed through so tests that patch ue5_autorig.call_bridge_tool still intercept the fire."""
+    return fire_and_poll(
+        script_path, result_path, timeout_s,
+        invoke=call_bridge_tool, noun="validate", marker=_VALIDATE_MARKER,
+        poll_interval_s=poll_interval_s,
+    )
+
+
+@bionics_tool(
+    name="ue5_validate_skeleton_bones",
+    category="ue5_autorig",
+    safety_tier=SafetyTier.SAFE,
+    read_only=True,
+    aliases=["validate-skeleton-bones", "validate-skeleton"],
+    title="Validate Skeleton Bones (23 Mannequin core, read-only, native :8090)",
+)
+def ue5_validate_skeleton_bones(
+    skeletal_mesh_path: Annotated[str, "UE content path to the SkeletalMesh"],
+    timeout_s: Annotated[float, "Max seconds to wait for the deferred game-thread validate"] = 30.0,
+) -> ToolResult:
+    """Validate a skeletal mesh as humanoid — read-only, NO rig side-effect (the AssetDoctor half).
+
+    Enumerates the mesh's bones (UE5.7 SkeletalMeshComponent) and asserts all 23 Mannequin core
+    bones are present. Returns SUCCESS only for a true humanoid; FAILURE (fail-closed) if bones
+    can't be read or any core bone is missing — never a vacuous pass. Unlike ue5_autorig_humanoid
+    this builds nothing, so it is safe to run as a pre-rig preflight or inside MVPDoctor's
+    demo_ready sweep. Deferred :8090 transport, mirrors ue5_autorig_humanoid.
+    """
+    skeletal_mesh_path = (skeletal_mesh_path or "").strip()
+    if not skeletal_mesh_path:
+        return ToolResult.failure("skeletal_mesh_path is required (UE content path to the SkeletalMesh).")
+    if not skeletal_mesh_path.startswith("/"):
+        return ToolResult.failure(
+            f"skeletal_mesh_path must be a UE content path starting with '/' (got '{skeletal_mesh_path}')."
+        )
+
+    scratch = _resolve_validate_scratch_dir()
+    if scratch is None:
+        return ToolResult.failure("Could not create a writable scratch dir for the validate handshake.")
+
+    params_path = scratch / "validate_params.json"
+    script_path = scratch / "validate_bones.py"
+    result_path = scratch / "validate_result.json"
+
+    try:
+        result_path.unlink(missing_ok=True)  # so the poll only sees a fresh write
+    except OSError:
+        pass
+
+    try:
+        params_path.write_text(
+            json.dumps({"skeletal_mesh_path": skeletal_mesh_path}),
+            encoding="utf-8",
+        )
+        script = (
+            _VALIDATE_ONLY_SCRIPT
+            .replace("__PARAMS_PATH__", params_path.as_posix())
+            .replace("__RESULT_PATH__", result_path.as_posix())
+        )
+        script_path.write_text(script, encoding="utf-8")
+    except OSError as e:
+        return ToolResult.failure(f"Failed to stage validate handshake files in {scratch}: {e}")
+
+    err, data = _fire_and_poll_validate(script_path, result_path, timeout_s)
+    if err is not None:
+        return err
+
+    bones = data.get("bones", {})
+    errors = data.get("errors", [])
+    payload = {
+        "humanoid": bones.get("humanoid"),
+        "bone_count": bones.get("count"),
+        "bone_method": bones.get("method"),
+        "mannequin_missing": bones.get("mannequin_missing"),
+        "stage": data.get("stage"),
+        "errors": errors,
+        "skeletal_mesh_path": skeletal_mesh_path,
+        "result_file": str(result_path),
+    }
+
+    if bool(data.get("ok")) and bones.get("humanoid"):
+        return ToolResult.success(
+            content=f"{skeletal_mesh_path}: valid humanoid ({bones.get('count')} bones, all 23 Mannequin core present).",
+            data=payload,
+        )
+
+    reason = "; ".join(errors) if errors else f"validation failed at stage '{data.get('stage')}'"
+    return ToolResult(
+        ok=False,
+        content=f"Skeleton validation of {skeletal_mesh_path} failed-closed: {reason}",
+        data=payload,
+        error=reason,
+    )

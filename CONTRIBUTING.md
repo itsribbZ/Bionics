@@ -22,7 +22,7 @@ pip install -e ".[dev,otel,vector]"
 #    Linux/macOS bash:   export ANTHROPIC_API_KEY=sk-ant-...
 
 # 5. Verify
-pytest tests/                 # should be 410 passed
+pytest tests/                 # should be 446 passed
 ruff check .                  # lint
 mypy core bionics_tools       # type check (warnings OK, errors not)
 ```

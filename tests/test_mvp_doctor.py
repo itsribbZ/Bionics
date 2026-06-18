@@ -151,13 +151,14 @@ def test_planner_integration_format():
 def test_diagnose_failclosed_unregistered_category():
     """P0: diagnose() must NOT report demo_ready on a category with zero checks.
 
-    MOVEMENT has zero @check decorators today (ASSET now has two). The old code ran 0
-    checks and returned demo_ready=True (vacuous all() over []), handing the pipeline gate
-    a green light from no validation. The fail-closed guard turns that into a CRITICAL.
+    EXTRACTION has zero @check decorators today (MOVEMENT gained check_cmc_slide_config
+    2026-05-30; ASSET has two). The old code ran 0 checks and returned demo_ready=True
+    (vacuous all() over []), handing the pipeline gate a green light from no validation.
+    The fail-closed guard turns that into a CRITICAL.
     """
     doctor = MVPDoctor(ue5_project_path=".")
-    diag = doctor.diagnose(categories=[Category.MOVEMENT])
-    assert diag.checks_run == 0, "MOVEMENT has no registered checks"
+    diag = doctor.diagnose(categories=[Category.EXTRACTION])
+    assert diag.checks_run == 0, "EXTRACTION has no registered checks"
     assert not diag.is_demo_ready, "empty check set must fail-closed, not vacuously pass"
     assert any(f.id == "NO_VALIDATOR_FOR_REQUESTED_CATEGORIES" for f in diag.findings)
     assert diag.critical_count >= 1
@@ -167,8 +168,8 @@ def test_diagnose_failclosed_unregistered_category():
 def test_diagnose_failclosed_string_category():
     """String category names coerce to enums; unknown strings fail-closed."""
     doctor = MVPDoctor(ue5_project_path=".")
-    # 'MOVEMENT' (string) coerces to Category.MOVEMENT — still zero checks -> fail-closed.
-    diag = doctor.diagnose(categories=["MOVEMENT"])
+    # 'EXTRACTION' (string) coerces to Category.EXTRACTION — still zero checks -> fail-closed.
+    diag = doctor.diagnose(categories=["EXTRACTION"])
     assert not diag.is_demo_ready
     assert any(f.id == "NO_VALIDATOR_FOR_REQUESTED_CATEGORIES" for f in diag.findings)
     # Garbage string -> UNKNOWN_CATEGORY critical, never a vacuous pass.

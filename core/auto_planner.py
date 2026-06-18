@@ -879,6 +879,60 @@ class AutoPlanner:
             error = exec_result.error if not exec_result.success else ""
         return bool(exec_result.success), output_text, error
 
+    def _abi_gate_step(self, method: str, step: dict, script_content: str) -> dict | None:
+        """Static abi-guard pre-execution gate for ONE plan step (punch-list #4, 2026-05-30).
+
+        Runs core.abi_guard.analyze over the step's planned bridge call / script BEFORE it
+        executes and returns a fail-closed step-result dict if a BLOCK-level S7 violation
+        fires (e.g. a dead UE5.7 API like IKRetargetBatchOperationNameRule), or None if the
+        step is safe to execute.
+
+        Only the two project-mutating methods are gated — bionics_tool and ue5_python/python
+        — and only AFTER their callers have filtered C++ patch-hints, so a non-executed hint
+        is never blocked. WARN/INFO violations (e.g. bind_pin_to_property metadata-only) are
+        logged, never blocking. NEVER raises: an unavailable guard (ImportError) or any
+        analysis error returns None, so the gate can never freeze an otherwise-healthy plan.
+        """
+        try:
+            from core.abi_guard import analyze
+        except Exception:  # noqa: BLE001 — guard unavailable → don't block
+            return None
+
+        bridge_calls: list[dict] = []
+        if method == "bionics_tool" and step.get("bionics_tool"):
+            bridge_calls.append({
+                "tool": step["bionics_tool"],
+                "args": step.get("bionics_args", {}) or {},
+            })
+        elif method in ("ue5_python", "python") and script_content:
+            # Surface the script body as an arg so the S7.M dead-API scan fires on it.
+            bridge_calls.append({"tool": "ue5_python", "args": {"script": script_content}})
+        else:
+            return None
+
+        try:
+            report = analyze(plan=bridge_calls)
+        except Exception as e:  # noqa: BLE001 — analysis failure is non-fatal
+            self._log(f"  abi-guard analysis failed (non-fatal, proceeding): {e}")
+            return None
+
+        blocks = [v for v in report.violations if v.severity == "BLOCK"]
+        for v in report.violations:
+            if v.severity != "BLOCK":
+                self._log(f"  abi-guard [{v.severity}] {v.rule}: {v.message}")
+        if not blocks:
+            return None
+
+        msgs = "; ".join(f"{v.rule}: {v.message}" for v in blocks)
+        remedies = "; ".join(v.remedy for v in blocks if v.remedy)
+        self._log(f"  abi-guard BLOCK — refusing to execute step: {msgs}")
+        return {
+            "success": False,
+            "output": "",
+            "error": f"abi-guard BLOCK: {msgs}" + (f" Remedy: {remedies}" if remedies else ""),
+            "note": "abi_guard pre-execution gate blocked this step",
+        }
+
     def _execute_plan_steps(self, plan: dict, bridge, run_id: str | None = None) -> list[dict]:
         """Execute Python/script steps from a plan via UE5 bridge.
 
@@ -953,6 +1007,16 @@ class AutoPlanner:
                                            _step_script, _step_start, results[-1])
                     continue
 
+                # abi-guard pre-execution gate — fail-closed on BLOCK-level S7 violations
+                # (e.g. a dead UE5.7 API in the script). Runs AFTER patch-hint filtering so
+                # a non-executed C++ hint is never blocked. Never raises.
+                _abi_block = self._abi_gate_step(method, step, script_content)
+                if _abi_block is not None:
+                    results.append({"step": idx, **_abi_block})
+                    self._emit_step_event(run_id, idx, method, description,
+                                           _step_script, _step_start, results[-1])
+                    continue
+
                 self._log(f"Step {idx}: Executing Python in UE5 (native :8090 first)...")
                 step_success, output_text, synthesized_error = self._execute_python_step(
                     bridge, script_content
@@ -996,6 +1060,14 @@ class AutoPlanner:
             elif method == "bionics_tool" and step.get("bionics_tool"):
                 tool_name = step["bionics_tool"]
                 tool_args = step.get("bionics_args", {}) or {}
+                # abi-guard pre-execution gate — fail-closed on BLOCK-level S7 violations
+                # (e.g. a dead UE5.7 API referenced in the tool args). Never raises.
+                _abi_block = self._abi_gate_step(method, step, "")
+                if _abi_block is not None:
+                    results.append({"step": idx, **_abi_block})
+                    self._emit_step_event(run_id, idx, method, description,
+                                           _step_script, _step_start, results[-1])
+                    continue
                 self._log(f"Step {idx}: Invoking native tool {tool_name}...")
                 tool_res = self._invoke_bionics_tool(tool_name, tool_args)
                 self._log(

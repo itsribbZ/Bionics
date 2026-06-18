@@ -411,6 +411,173 @@ class MVPDoctor:
             )]
         return []
 
+    @check("Skeleton Bone Integrity (Live)", Category.ASSET)
+    def check_skeleton_bone_integrity(self) -> list[Finding]:
+        """Bridge-gated live ASSET check (punch-list #2, 2026-05-30): validates that SK_SW_
+        skeletal meshes in /Game carry all 23 Mannequin core bones, via the native :8090
+        ue5_validate_skeleton_bones tool. This is the in-engine AssetDoctor half that the
+        static ASSET checks (FBX flag, skeletal-presence) can't cover — a mesh that would
+        fail rigging now also fails the demo_ready sweep, not just an explicit autorig step.
+
+        Mirrors check_animbp's bridge gating: when UE5 isn't connected, emits a single INFO
+        finding and skips (never a false CRITICAL). Caps at 5 meshes to avoid flooding the editor.
+        """
+        findings: list[Finding] = []
+        if self._bridge is None or not getattr(self._bridge, "is_connected", False):
+            findings.append(Finding(
+                id="BONE_INTEGRITY_NO_BRIDGE",
+                title="UE5 not connected — skipping live skeleton bone integrity check",
+                description=(
+                    "Bone integrity needs a live :8090 connection to enumerate bones via "
+                    "SkeletalMeshComponent. Static ASSET checks still ran."
+                ),
+                severity=Severity.INFO,
+                category=Category.ASSET,
+                fix_method=FixMethod.NONE,
+            ))
+            return findings
+
+        if not self._content.exists():
+            return []
+        sk_paths = sorted(self._content.rglob("SK_SW_*.uasset"))
+        if not sk_paths:
+            return []  # check_skeletal_assets_present already covers the zero case
+
+        # Filesystem path -> /Game content path
+        ue_paths: list[str] = []
+        for p in sk_paths[:5]:  # cap to avoid flooding the editor
+            try:
+                rel = p.relative_to(self._content)
+                ue_paths.append("/Game/" + rel.as_posix()[: -len(".uasset")])
+            except ValueError:
+                continue
+
+        try:
+            from bionics_tools.ue5_autorig import ue5_validate_skeleton_bones
+        except Exception as e:  # noqa: BLE001 — tool import failure is non-fatal
+            findings.append(Finding(
+                id="BONE_INTEGRITY_TOOL_UNAVAILABLE",
+                title=f"ue5_validate_skeleton_bones unavailable: {e}",
+                description=str(e),
+                severity=Severity.LOW,
+                category=Category.ASSET,
+            ))
+            return findings
+
+        for ue_path in ue_paths:
+            try:
+                result = ue5_validate_skeleton_bones(skeletal_mesh_path=ue_path, timeout_s=30.0)
+            except Exception as e:  # noqa: BLE001
+                findings.append(Finding(
+                    id=f"BONE_INTEGRITY_ERROR_{Path(ue_path).name.upper()}",
+                    title=f"Bone integrity check raised for {Path(ue_path).name}: {e}",
+                    description=str(e),
+                    severity=Severity.MEDIUM,
+                    category=Category.ASSET,
+                ))
+                continue
+            if not getattr(result, "ok", False):
+                missing = (getattr(result, "data", None) or {}).get("mannequin_missing") or []
+                findings.append(Finding(
+                    id=f"BONE_INTEGRITY_FAIL_{Path(ue_path).name.upper()}",
+                    title=f"{Path(ue_path).name}: not a valid humanoid skeleton",
+                    description=(
+                        f"{ue_path} failed bone integrity (missing {missing[:10]}). It will T-pose "
+                        "under a Mannequin retarget and is not demo-ready."
+                    ),
+                    severity=Severity.HIGH,
+                    category=Category.ASSET,
+                    fix_method=FixMethod.NONE,
+                    fix_hint=(
+                        "Re-export from Blender with a full Mannequin armature and reimport via "
+                        "ue5_uasvc_import_skeletal."
+                    ),
+                ))
+        return findings
+
+    @check("CMC Slide Config", Category.MOVEMENT)
+    def check_cmc_slide_config(self) -> list[Finding]:
+        """Static MOVEMENT validator (no bridge): the custom slide physics in
+        SWCharacterMovementComponent.h must be present and sane. A zero
+        SlideGroundFriction is a frictionless slide that never decays; a zero
+        SlideMaxDuration means the slide never auto-stands. Pure file read — mirrors
+        check_interchange_fbx_flag's static pattern, so MOVEMENT is no longer a
+        zero-check category that can only ever fail-closed.
+
+        Grounded against the real header (verified 2026-05-30): the Sworder|Slide block
+        declares SlideImpulseStrength / SlideMinSpeed / SlideGroundFriction (0.5f) /
+        BrakingDecelerationSliding / SlideMaxDuration (1.5f).
+        """
+        findings: list[Finding] = []
+        cmc_h = self._source / "Variant_Combat" / "SWCharacterMovementComponent.h"
+        content = self._read_file(cmc_h)
+        if not content:
+            findings.append(Finding(
+                id="CMC_H_MISSING",
+                title="SWCharacterMovementComponent.h not found — slide physics unverifiable",
+                description=(
+                    f"Expected {cmc_h}. The custom CharacterMovementComponent may have been "
+                    "renamed or moved; slide/movement feel config cannot be validated."
+                ),
+                severity=Severity.MEDIUM,
+                category=Category.MOVEMENT,
+                fix_method=FixMethod.NONE,
+                file_path=str(cmc_h),
+            ))
+            return findings
+
+        # SlideGroundFriction must be declared and non-zero (0.0 = frictionless infinite slide).
+        m = re.search(r"SlideGroundFriction\s*=\s*([0-9.]+)f?", content)
+        if m is None:
+            findings.append(Finding(
+                id="CMC_SLIDE_FRICTION_MISSING",
+                title="SlideGroundFriction not declared in SWCharacterMovementComponent.h",
+                description=(
+                    "The slide friction constant is absent — slide falls back to the stock CMC "
+                    "GroundFriction and loses its tuned feel."
+                ),
+                severity=Severity.MEDIUM,
+                category=Category.MOVEMENT,
+                fix_method=FixMethod.CPP_EDIT,
+                fix_hint="Declare `float SlideGroundFriction = 0.5f;` on USWCharacterMovementComponent.",
+                file_path=str(cmc_h),
+            ))
+        elif float(m.group(1)) == 0.0:
+            findings.append(Finding(
+                id="CMC_SLIDE_FRICTION_ZERO",
+                title="SlideGroundFriction = 0.0 — frictionless slide never decays",
+                description=(
+                    "A zero SlideGroundFriction removes all slide deceleration; the player slides "
+                    "forever. Set a small positive value (~0.5)."
+                ),
+                severity=Severity.HIGH,
+                category=Category.MOVEMENT,
+                fix_method=FixMethod.CPP_EDIT,
+                fix_hint="Set SlideGroundFriction to ~0.5f in SWCharacterMovementComponent.h.",
+                file_path=str(cmc_h),
+                line_number=self._find_line(cmc_h, "SlideGroundFriction"),
+            ))
+
+        # SlideMaxDuration, when declared, must be > 0 (0.0 = slide never auto-stands).
+        m2 = re.search(r"SlideMaxDuration\s*=\s*([0-9.]+)f?", content)
+        if m2 is not None and float(m2.group(1)) == 0.0:
+            findings.append(Finding(
+                id="CMC_SLIDE_MAXDURATION_ZERO",
+                title="SlideMaxDuration = 0.0 — slide never auto-stands",
+                description=(
+                    "A zero SlideMaxDuration means the auto-stand timer never fires; the player can "
+                    "get stuck sliding. Set a positive duration (~1.5s)."
+                ),
+                severity=Severity.MEDIUM,
+                category=Category.MOVEMENT,
+                fix_method=FixMethod.CPP_EDIT,
+                fix_hint="Set SlideMaxDuration to ~1.5f in SWCharacterMovementComponent.h.",
+                file_path=str(cmc_h),
+                line_number=self._find_line(cmc_h, "SlideMaxDuration"),
+            ))
+
+        return findings
+
     @check("DirectionalLight Mobility", Category.EDITOR)
     def check_directional_light(self) -> list[Finding]:
         """Check if DirectionalLight is spawned as Movable (not Static)."""

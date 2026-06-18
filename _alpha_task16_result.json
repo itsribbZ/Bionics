@@ -1,0 +1,770 @@
+{
+  "asset_path": "/Game/SciFITrooper_Man_03/Blueprints/AnimBP/ABP_SciFiTrooperManV3",
+  "skeleton": "/Game/SciFITrooper_Man_03/SkeletalMesh/CH_SciFiTrooper_Man_03_Skeleton.CH_SciFiTrooper_Man_03_Skeleton",
+  "node_count": 18,
+  "nodes": [
+    {
+      "name": "AnimGraphNode_Root_0",
+      "class": "AnimGraphNode_Root",
+      "title": "Output Pose\nAnimGraph",
+      "pos_x": 32,
+      "pos_y": 48,
+      "input_pins": [
+        {
+          "name": "Result",
+          "display_name": "Result",
+          "direction": "input",
+          "type": "struct",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": [
+            {
+              "node": "AnimGraphNode_LayeredBoneBlend_0",
+              "pin": "Pose"
+            }
+          ]
+        }
+      ],
+      "output_pins": []
+    },
+    {
+      "name": "AnimGraphNode_StateMachine_0",
+      "class": "AnimGraphNode_StateMachine",
+      "title": "New State Machine\nState Machine",
+      "pos_x": -1936,
+      "pos_y": 80,
+      "is_state_machine": true,
+      "states": [
+        {
+          "name": "Idle/Run",
+          "node_name": "AnimStateNode_1"
+        },
+        {
+          "name": "JumpStart",
+          "node_name": "AnimStateNode_4"
+        },
+        {
+          "name": "JumpLoop",
+          "node_name": "AnimStateNode_6"
+        },
+        {
+          "name": "JumpEnd",
+          "node_name": "AnimStateNode_8"
+        }
+      ],
+      "input_pins": [],
+      "output_pins": [
+        {
+          "name": "Pose",
+          "display_name": "",
+          "direction": "output",
+          "type": "struct",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": [
+            {
+              "node": "AnimGraphNode_BlendListByBool_0",
+              "pin": "BlendPose_1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "AnimGraphNode_ModifyBone_4",
+      "class": "AnimGraphNode_ModifyBone",
+      "title": "Transform (Modify) Bone\nBone: foot_l",
+      "pos_x": -832,
+      "pos_y": 96,
+      "input_pins": [
+        {
+          "name": "ComponentPose",
+          "display_name": "Component Pose",
+          "direction": "input",
+          "type": "struct",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": [
+            {
+              "node": "AnimGraphNode_LocalToComponentSpace_1",
+              "pin": "ComponentPose"
+            }
+          ]
+        },
+        {
+          "name": "Alpha",
+          "display_name": "Alpha",
+          "direction": "input",
+          "type": "real",
+          "sub_type": "float",
+          "hidden": false,
+          "connections": []
+        },
+        {
+          "name": "Translation",
+          "display_name": "Translation",
+          "direction": "input",
+          "type": "struct",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": []
+        },
+        {
+          "name": "Rotation",
+          "display_name": "Rotation",
+          "direction": "input",
+          "type": "struct",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": [
+            {
+              "node": "K2Node_Select_0",
+              "pin": "ReturnValue"
+            }
+          ]
+        },
+        {
+          "name": "Scale",
+          "display_name": "Scale",
+          "direction": "input",
+          "type": "struct",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": []
+        }
+      ],
+      "output_pins": [
+        {
+          "name": "Pose",
+          "display_name": "",
+          "direction": "output",
+          "type": "struct",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": [
+            {
+              "node": "AnimGraphNode_ModifyBone_0",
+              "pin": "ComponentPose"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "AnimGraphNode_LocalToComponentSpace_1",
+      "class": "AnimGraphNode_LocalToComponentSpace",
+      "title": "Local To Component",
+      "pos_x": -1040,
+      "pos_y": 96,
+      "input_pins": [
+        {
+          "name": "LocalPose",
+          "display_name": "",
+          "direction": "input",
+          "type": "struct",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": [
+            {
+              "node": "AnimGraphNode_BlendListByBool_0",
+              "pin": "Pose"
+            }
+          ]
+        }
+      ],
+      "output_pins": [
+        {
+          "name": "ComponentPose",
+          "display_name": "",
+          "direction": "output",
+          "type": "struct",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": [
+            {
+              "node": "AnimGraphNode_ModifyBone_4",
+              "pin": "ComponentPose"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "AnimGraphNode_ComponentToLocalSpace_1",
+      "class": "AnimGraphNode_ComponentToLocalSpace",
+      "title": "Component To Local",
+      "pos_x": -544,
+      "pos_y": 96,
+      "input_pins": [
+        {
+          "name": "ComponentPose",
+          "display_name": "",
+          "direction": "input",
+          "type": "struct",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": [
+            {
+              "node": "AnimGraphNode_ModifyBone_0",
+              "pin": "Pose"
+            }
+          ]
+        }
+      ],
+      "output_pins": [
+        {
+          "name": "Pose",
+          "display_name": "",
+          "direction": "output",
+          "type": "struct",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": [
+            {
+              "node": "AnimGraphNode_Slot_0",
+              "pin": "Source"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "AnimGraphNode_ModifyBone_0",
+      "class": "AnimGraphNode_ModifyBone",
+      "title": "Transform (Modify) Bone\nBone: foot_r",
+      "pos_x": -832,
+      "pos_y": 368,
+      "input_pins": [
+        {
+          "name": "ComponentPose",
+          "display_name": "Component Pose",
+          "direction": "input",
+          "type": "struct",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": [
+            {
+              "node": "AnimGraphNode_ModifyBone_4",
+              "pin": "Pose"
+            }
+          ]
+        },
+        {
+          "name": "Alpha",
+          "display_name": "Alpha",
+          "direction": "input",
+          "type": "real",
+          "sub_type": "float",
+          "hidden": false,
+          "connections": []
+        },
+        {
+          "name": "Translation",
+          "display_name": "Translation",
+          "direction": "input",
+          "type": "struct",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": []
+        },
+        {
+          "name": "Rotation",
+          "display_name": "Rotation",
+          "direction": "input",
+          "type": "struct",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": [
+            {
+              "node": "K2Node_Select_0",
+              "pin": "ReturnValue"
+            }
+          ]
+        },
+        {
+          "name": "Scale",
+          "display_name": "Scale",
+          "direction": "input",
+          "type": "struct",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": []
+        }
+      ],
+      "output_pins": [
+        {
+          "name": "Pose",
+          "display_name": "",
+          "direction": "output",
+          "type": "struct",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": [
+            {
+              "node": "AnimGraphNode_ComponentToLocalSpace_1",
+              "pin": "ComponentPose"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "K2Node_VariableGet_163",
+      "class": "K2Node_VariableGet",
+      "title": "Get IsModular",
+      "pos_x": -1424,
+      "pos_y": 480,
+      "input_pins": [],
+      "output_pins": [
+        {
+          "name": "IsModular",
+          "display_name": "Is Modular",
+          "direction": "output",
+          "type": "bool",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": [
+            {
+              "node": "K2Node_Select_0",
+              "pin": "Index"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "K2Node_Select_0",
+      "class": "K2Node_Select",
+      "title": "Select",
+      "pos_x": -1248,
+      "pos_y": 384,
+      "input_pins": [
+        {
+          "name": "Option 0",
+          "display_name": "False",
+          "direction": "input",
+          "type": "struct",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": []
+        },
+        {
+          "name": "Option 1",
+          "display_name": "True",
+          "direction": "input",
+          "type": "struct",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": []
+        },
+        {
+          "name": "Index",
+          "display_name": "Index",
+          "direction": "input",
+          "type": "bool",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": [
+            {
+              "node": "K2Node_VariableGet_163",
+              "pin": "IsModular"
+            }
+          ]
+        }
+      ],
+      "output_pins": [
+        {
+          "name": "ReturnValue",
+          "display_name": "Return Value",
+          "direction": "output",
+          "type": "struct",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": [
+            {
+              "node": "AnimGraphNode_ModifyBone_0",
+              "pin": "Rotation"
+            },
+            {
+              "node": "AnimGraphNode_ModifyBone_4",
+              "pin": "Rotation"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "EdGraphNode_Comment_2",
+      "class": "EdGraphNode_Comment",
+      "title": "Use This Nodes in Your Anim BP, if you use Modular Char. Is Modular = True.",
+      "pos_x": -1472,
+      "pos_y": 48,
+      "input_pins": [],
+      "output_pins": []
+    },
+    {
+      "name": "AnimGraphNode_Slot_0",
+      "class": "AnimGraphNode_Slot",
+      "title": "Slot 'DefaultSlot'\nGroup 'DefaultGroup'",
+      "pos_x": -224,
+      "pos_y": 80,
+      "input_pins": [
+        {
+          "name": "Source",
+          "display_name": "Source",
+          "direction": "input",
+          "type": "struct",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": [
+            {
+              "node": "AnimGraphNode_ComponentToLocalSpace_1",
+              "pin": "Pose"
+            }
+          ]
+        }
+      ],
+      "output_pins": [
+        {
+          "name": "Pose",
+          "display_name": "",
+          "direction": "output",
+          "type": "struct",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": [
+            {
+              "node": "AnimGraphNode_SaveCachedPose_0",
+              "pin": "Pose"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "AnimGraphNode_Slot_1",
+      "class": "AnimGraphNode_Slot",
+      "title": "Slot 'UpperBody'\nGroup 'DefaultGroup'",
+      "pos_x": -256,
+      "pos_y": 192,
+      "input_pins": [
+        {
+          "name": "Source",
+          "display_name": "Source",
+          "direction": "input",
+          "type": "struct",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": [
+            {
+              "node": "AnimGraphNode_UseCachedPose_1",
+              "pin": "Pose"
+            }
+          ]
+        }
+      ],
+      "output_pins": [
+        {
+          "name": "Pose",
+          "display_name": "",
+          "direction": "output",
+          "type": "struct",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": [
+            {
+              "node": "AnimGraphNode_LayeredBoneBlend_0",
+              "pin": "BlendPoses_0"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "AnimGraphNode_LayeredBoneBlend_0",
+      "class": "AnimGraphNode_LayeredBoneBlend",
+      "title": "Layered blend per bone",
+      "pos_x": 432,
+      "pos_y": 48,
+      "input_pins": [
+        {
+          "name": "BasePose",
+          "display_name": "Base Pose",
+          "direction": "input",
+          "type": "struct",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": [
+            {
+              "node": "AnimGraphNode_UseCachedPose_0",
+              "pin": "Pose"
+            }
+          ]
+        },
+        {
+          "name": "BlendPoses_0",
+          "display_name": "Blend Poses 0",
+          "direction": "input",
+          "type": "struct",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": [
+            {
+              "node": "AnimGraphNode_Slot_1",
+              "pin": "Pose"
+            }
+          ]
+        },
+        {
+          "name": "BlendWeights_0",
+          "display_name": "Blend Weights 0",
+          "direction": "input",
+          "type": "real",
+          "sub_type": "float",
+          "hidden": false,
+          "connections": []
+        }
+      ],
+      "output_pins": [
+        {
+          "name": "Pose",
+          "display_name": "",
+          "direction": "output",
+          "type": "struct",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": [
+            {
+              "node": "AnimGraphNode_Root_0",
+              "pin": "Result"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "AnimGraphNode_SaveCachedPose_0",
+      "class": "AnimGraphNode_SaveCachedPose",
+      "title": "Save cached pose ''",
+      "pos_x": 0,
+      "pos_y": 150,
+      "input_pins": [
+        {
+          "name": "Pose",
+          "display_name": "Pose",
+          "direction": "input",
+          "type": "struct",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": [
+            {
+              "node": "AnimGraphNode_Slot_0",
+              "pin": "Pose"
+            }
+          ]
+        }
+      ],
+      "output_pins": []
+    },
+    {
+      "name": "AnimGraphNode_UseCachedPose_0",
+      "class": "AnimGraphNode_UseCachedPose",
+      "title": "Use cached pose ''",
+      "pos_x": 200,
+      "pos_y": 50,
+      "input_pins": [],
+      "output_pins": [
+        {
+          "name": "Pose",
+          "display_name": "",
+          "direction": "output",
+          "type": "struct",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": [
+            {
+              "node": "AnimGraphNode_LayeredBoneBlend_0",
+              "pin": "BasePose"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "AnimGraphNode_UseCachedPose_1",
+      "class": "AnimGraphNode_UseCachedPose",
+      "title": "Use cached pose ''",
+      "pos_x": -100,
+      "pos_y": 350,
+      "input_pins": [],
+      "output_pins": [
+        {
+          "name": "Pose",
+          "display_name": "",
+          "direction": "output",
+          "type": "struct",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": [
+            {
+              "node": "AnimGraphNode_Slot_1",
+              "pin": "Source"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "AnimGraphNode_StateMachine_1",
+      "class": "AnimGraphNode_StateMachine",
+      "title": "New State Machine_1\nState Machine",
+      "pos_x": -1936,
+      "pos_y": 400,
+      "is_state_machine": true,
+      "states": [
+        {
+          "name": "Rifle_Idle",
+          "node_name": "AnimStateNode_0"
+        },
+        {
+          "name": "Rifle_Move",
+          "node_name": "AnimStateNode_1"
+        },
+        {
+          "name": "Rifle_Crouch_Idle",
+          "node_name": "AnimStateNode_2"
+        },
+        {
+          "name": "Rifle_Crouch_Move",
+          "node_name": "AnimStateNode_3"
+        }
+      ],
+      "input_pins": [],
+      "output_pins": [
+        {
+          "name": "Pose",
+          "display_name": "",
+          "direction": "output",
+          "type": "struct",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": [
+            {
+              "node": "AnimGraphNode_BlendListByBool_0",
+              "pin": "BlendPose_0"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "AnimGraphNode_BlendListByBool_0",
+      "class": "AnimGraphNode_BlendListByBool",
+      "title": "Blend Poses by bool",
+      "pos_x": -1700,
+      "pos_y": 80,
+      "input_pins": [
+        {
+          "name": "BlendPose_0",
+          "display_name": "True Pose",
+          "direction": "input",
+          "type": "struct",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": [
+            {
+              "node": "AnimGraphNode_StateMachine_1",
+              "pin": "Pose"
+            }
+          ]
+        },
+        {
+          "name": "BlendPose_1",
+          "display_name": "False Pose",
+          "direction": "input",
+          "type": "struct",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": [
+            {
+              "node": "AnimGraphNode_StateMachine_0",
+              "pin": "Pose"
+            }
+          ]
+        },
+        {
+          "name": "BlendTime_0",
+          "display_name": "True Blend Time",
+          "direction": "input",
+          "type": "real",
+          "sub_type": "float",
+          "hidden": false,
+          "connections": []
+        },
+        {
+          "name": "BlendTime_1",
+          "display_name": "False Blend Time",
+          "direction": "input",
+          "type": "real",
+          "sub_type": "float",
+          "hidden": false,
+          "connections": []
+        },
+        {
+          "name": "bActiveValue",
+          "display_name": "Active Value",
+          "direction": "input",
+          "type": "bool",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": [
+            {
+              "node": "K2Node_VariableGet_2",
+              "pin": "bHasRangedWeapon"
+            }
+          ]
+        }
+      ],
+      "output_pins": [
+        {
+          "name": "Pose",
+          "display_name": "",
+          "direction": "output",
+          "type": "struct",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": [
+            {
+              "node": "AnimGraphNode_LocalToComponentSpace_1",
+              "pin": "LocalPose"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "K2Node_VariableGet_2",
+      "class": "K2Node_VariableGet",
+      "title": "Get bHasRangedWeapon",
+      "pos_x": -1936,
+      "pos_y": 240,
+      "input_pins": [],
+      "output_pins": [
+        {
+          "name": "bHasRangedWeapon",
+          "display_name": "Has Ranged Weapon",
+          "direction": "output",
+          "type": "bool",
+          "sub_type": "None",
+          "hidden": false,
+          "connections": [
+            {
+              "node": "AnimGraphNode_BlendListByBool_0",
+              "pin": "bActiveValue"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

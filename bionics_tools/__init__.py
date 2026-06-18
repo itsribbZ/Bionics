@@ -15,6 +15,7 @@ Organization:
     ue5_animgraph.py — AnimGraph full automation + BPDoctor integration (via C++ plugin)
     ue5_eventgraph.py — EventGraph (K2) editing — combat polish enabler (via C++ plugin, v0.5.11)
     ue5_rigging.py   — IK Rig + IK Retargeter + batch retarget (Bible Step 3)
+    ue5_retarget.py  — native batch retarget (UE5.7 duplicate_and_retarget, :8090) — M5 Stage 2
     ue5_controlrig.py — Control Rig asset + AnimBP assign (Bible Step 6)
     ue5_animlayer.py — Linked Anim Layer AnimBP create (Bible Step 2, 2026-04-17)
     ue5_niagara.py   — VFX spawn + User Exposed Param bind (2026-04-17)
@@ -60,6 +61,7 @@ def register_all() -> int:
         ue5_eventgraph,  # noqa: F401 — EventGraph (K2) editing via C++ plugin (v0.5.11)
         ue5_native,  # noqa: F401 — C++ plugin bridge
         ue5_niagara,  # noqa: F401 — VFX spawn + param bind
+        ue5_retarget,  # noqa: F401 — native batch retarget (M5 Stage 2, UE5.7 :8090)
         ue5_rigging,  # noqa: F401 — IK Rig + IK Retargeter (Bible Step 3)
         ue5_runtime,  # noqa: F401
         ue5_uasvc,  # noqa: F401 — UE5 Asset Service: native skeletal import (:8090)
@@ -95,6 +97,7 @@ def register_ue5_only() -> int:
         ue5_eventgraph,  # noqa: F401 — EventGraph (K2) editing
         ue5_native,  # noqa: F401 — C++ plugin bridge
         ue5_niagara,  # noqa: F401 — Niagara VFX
+        ue5_retarget,  # noqa: F401 — native batch retarget (M5 Stage 2, UE5.7 :8090)
         ue5_rigging,  # noqa: F401 — IK Rig + IK Retargeter
         ue5_runtime,  # noqa: F401
         ue5_uasvc,  # noqa: F401 — UE5 Asset Service: native skeletal import (:8090)
