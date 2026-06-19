@@ -291,7 +291,7 @@ Tool authoring is a single `@bionics_tool` decorator — see `bionics_tools/ue5_
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+All rights reserved. Source available for portfolio review; not licensed for reuse. See [LICENSE](LICENSE).
 
 ## Links
 
