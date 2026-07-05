@@ -1,0 +1,15 @@
+{
+  "name": "capture_viewport",
+  "description": "Capture the current UE5 editor viewport to a PNG. Combined with project-info and logs, this is the minimum visual confirmation that UE5 is live and Bionics can reach it. Works on any project — no assumptions about assets or maps.",
+  "steps": [
+    {"action": "ue5_project_info", "params": {}},
+    {"action": "ue5_capture_viewport", "params": {}},
+    {"action": "ue5_get_logs", "params": {"lines": 50}}
+  ],
+  "prerequisites": [
+    "UE5 Editor open with any project loaded",
+    "Web Remote Control + Python Editor Script Plugin enabled in UE5",
+    "OR BionicsBridge plugin installed for the native (5-20ms) path"
+  ],
+  "warnings": []
+}

@@ -1,0 +1,10 @@
+{
+  "_comment": "Copy this file to .mcp.json and replace <ABSOLUTE_PATH_TO_BIONICS> with your local path. The .gitignore keeps .mcp.json out of source control so each machine can have its own.",
+  "mcpServers": {
+    "bionics": {
+      "command": "python",
+      "args": ["<ABSOLUTE_PATH_TO_BIONICS>/mcp_server.py"],
+      "cwd": "<ABSOLUTE_PATH_TO_BIONICS>"
+    }
+  }
+}

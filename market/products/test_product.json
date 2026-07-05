@@ -1,0 +1,15 @@
+{
+  "name": "test_product",
+  "what_it_does": "Commission platform for freelance artists",
+  "target_audience": "Freelance digital artists",
+  "features": [
+    "Inbox",
+    "Payment integration",
+    "Delivery tracking"
+  ],
+  "competitors": "Ko-fi, Gumroad",
+  "tone": "friendly",
+  "audience_state": "pain-aware",
+  "unique_differentiator": "Only platform for commission artists",
+  "saved_at": "2026-04-05T02:59:42.927432"
+}

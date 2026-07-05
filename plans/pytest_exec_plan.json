@@ -1,0 +1,13 @@
+{
+  "name": "pytest_exec_plan",
+  "title": "pytest_exec_plan",
+  "description": "",
+  "steps": [
+    {
+      "action": "version"
+    },
+    {
+      "action": "list_categories"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "name": "list_all_actors",
+  "description": "List every actor in the current UE5 level via the native C++ BionicsBridge path (5-20ms). Confirms end-to-end Bionics → BionicsBridge → UE5 round-trip at native speed. Read-only. Works on any level.",
+  "steps": [
+    {"action": "ue5_native_status", "params": {}},
+    {"action": "ue5_native_list_tools", "params": {}},
+    {"action": "ue5_native_get_actors", "params": {}}
+  ],
+  "prerequisites": [
+    "UE5 Editor open with any level loaded",
+    "BionicsBridge plugin installed and compiled (see plugins/BionicsBridge/README.md)"
+  ],
+  "warnings": [
+    "If ue5_native_status fails, the BionicsBridge plugin is not running. Falls back via HTTP Remote Control is NOT automatic for native-only tools — rebuild the plugin."
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "name": "hello_world",
+  "description": "Smoke test that Bionics is alive. Prints version, tool count, and category list. No UE5 required. Safe to run anywhere.",
+  "steps": [
+    {"action": "version", "params": {}},
+    {"action": "list_categories", "params": {}},
+    {"action": "list_tools", "params": {}}
+  ],
+  "prerequisites": [],
+  "warnings": []
+}

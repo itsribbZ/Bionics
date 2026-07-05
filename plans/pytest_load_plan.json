@@ -1,0 +1,10 @@
+{
+  "name": "pytest_load_plan",
+  "title": "pytest_load_plan",
+  "description": "",
+  "steps": [
+    {
+      "action": "version"
+    }
+  ]
+}

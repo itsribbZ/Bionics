@@ -1,0 +1,62 @@
+{
+  "name": "pytest_plan",
+  "title": "Market Bot: 5 posts for pytest_plan_test",
+  "description": "Generates 5 marketing content variants for 'pytest_plan_test' using types=['social'], frameworks=['PAS']. Executes via execute_plan.",
+  "steps": [
+    {
+      "action": "market_generate_post",
+      "params": {
+        "product_name": "pytest_plan_test",
+        "content_type": "social",
+        "framework": "PAS",
+        "variant": 1,
+        "save_output": true,
+        "model": "claude-sonnet-4-6"
+      }
+    },
+    {
+      "action": "market_generate_post",
+      "params": {
+        "product_name": "pytest_plan_test",
+        "content_type": "social",
+        "framework": "PAS",
+        "variant": 2,
+        "save_output": true,
+        "model": "claude-sonnet-4-6"
+      }
+    },
+    {
+      "action": "market_generate_post",
+      "params": {
+        "product_name": "pytest_plan_test",
+        "content_type": "social",
+        "framework": "PAS",
+        "variant": 3,
+        "save_output": true,
+        "model": "claude-sonnet-4-6"
+      }
+    },
+    {
+      "action": "market_generate_post",
+      "params": {
+        "product_name": "pytest_plan_test",
+        "content_type": "social",
+        "framework": "PAS",
+        "variant": 4,
+        "save_output": true,
+        "model": "claude-sonnet-4-6"
+      }
+    },
+    {
+      "action": "market_generate_post",
+      "params": {
+        "product_name": "pytest_plan_test",
+        "content_type": "social",
+        "framework": "PAS",
+        "variant": 5,
+        "save_output": true,
+        "model": "claude-sonnet-4-6"
+      }
+    }
+  ]
+}
