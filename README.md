@@ -17,7 +17,7 @@ See **[docs/demos/](docs/demos/)** for the BPDoctor hero GIF (T1.A) and the 4-mi
 - **Native C++ bridge (BionicsBridge plugin)** — architecturally expected ~5-20ms (in-process JSON-RPC over loopback HTTP) vs ~100-400ms for Python multicast remote-exec; benchmark pending. See `plugins/BionicsBridge/README.md` for the technical breakdown.
 - **MCP server** (FastMCP 2.11+ / 3.x) — drops straight into Claude Code, Cursor, Windsurf, or any MCP-aware client. Full MCP 2025-11-25 spec: annotations, `outputSchema` on query tools, async Tasks for long-running ops.
 - **BPDoctor** — 34-check static analysis with auto-fix for Blueprint/AnimBP errors (missing MM schema, dead cached poses, unconnected slots, empty state machines, blend-weight sum violations, etc.).
-- **Full AAA animation pipeline** — Motion Matching schema setup, IK Rig + IK Retargeter creation, batch retargeting of N animations, Linked Anim Layer AnimBPs, Control Rig asset creation and AnimBP binding.
+- **Animation pipeline tooling** — Motion Matching schema setup, IK Rig + IK Retargeter creation, batch retargeting of N animations, Linked Anim Layer AnimBPs, Control Rig asset creation and AnimBP binding.
 - **Watch Mode** — read-only screen-analysis loop with TTS overlay that explains UE5 systems while you work.
 - **Persistent memory with optional sqlite-vec semantic search** — cross-session SQLite memory and proven-sequence warm-starts. Opt-in vector search via `pip install bionics-agent[vector,embeddings_local]`.
 - **Sub-agent fan-out** — named `AgentDefinition`s with tool subsets + `dispatch_parallel` for multi-perspective plans, critic ensembles, or parallel research.
